@@ -1892,6 +1892,11 @@ pub fn worker<FUZZER: Fuzzer>(
 
                                 if is_new {
                                     drop(curr_metadata);
+
+                                    // Ensure this input has been written
+                                    save_input_in_project(&input, project_dir, "current_corpus")
+                                        .unwrap();
+
                                     total_corpus.insert(input);
                                 }
                             }
