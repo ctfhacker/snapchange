@@ -125,24 +125,13 @@ impl<'de> Deserialize<'de> for FeedbackLog {
             }
         }
 
-        // Convert the hex strings back into CoverageType
-        if let Some([addr, hit_count]) = hex.split(&",").array_chunks().next() {
-            let addr = u64::from_str_radix(&addr[2..], 16)
-                .expect(&format!("Failed to parse coverage address {hex} {addr}"));
-
-            return Ok(FeedbackLog::VAddr((
-                VirtAddr(addr),
-                hit_count.parse::<u16>().unwrap(),
-            )));
-        }
-
         #[cfg(feature = "custom_feedback")]
         if let Some(custom_max) = hex.strip_prefix("CustomMax|") {
-            if let Some([tag, val]) = hex.split(&",").array_chunks().next() {
-                let tag =
-                    u64::from_str_radix(&tag[2..], 16).expect("Failed to deserialize tag: {tag}");
-                let val =
-                    u64::from_str_radix(&val[2..], 16).expect("Failed to deserialize val: {val}");
+            if let Some([tag, val]) = custom_max.split(&",").array_chunks().next() {
+                let tag = u64::from_str_radix(&tag[2..], 16)
+                    .expect(&format!("Failed to deserialize tag: {tag}"));
+                let val = u64::from_str_radix(&val[2..], 16)
+                    .expect(&format!("Failed to deserialize val: {val}"));
 
                 return Ok(FeedbackLog::CustomMax((tag, val)));
             } else {
@@ -156,6 +145,17 @@ impl<'de> Deserialize<'de> for FeedbackLog {
                 .expect("Failed to deserialize custom: {custom}");
 
             return Ok(FeedbackLog::Custom(custom));
+        }
+
+        // Convert the hex strings back into CoverageType
+        if let Some([addr, hit_count]) = hex.split(&",").array_chunks().next() {
+            let addr = u64::from_str_radix(&addr[2..], 16)
+                .expect(&format!("Failed to parse coverage address {hex} {addr}"));
+
+            return Ok(FeedbackLog::VAddr((
+                VirtAddr(addr),
+                hit_count.parse::<u16>().unwrap(),
+            )));
         }
 
         panic!("Failed to parse element: {hex}");
