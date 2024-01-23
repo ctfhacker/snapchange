@@ -10,7 +10,7 @@ RUN ls -la /opt/harness
 RUN cd /opt/harness && CC=clang CXX='-g' make test_cmpsolves
 RUN truncate -s 16383 /opt/input
 	
-FROM snapchange_snapshot
+FROM ctfhacker/snapchange_snapshot
 COPY --from=target / "$SNAPSHOT_INPUT"
 
 ENV SNAPSHOT_ENTRYPOINT=/opt/harness/test_cmpsolves

@@ -1,6 +1,5 @@
 DOCKER ?= docker
 FUZZ_CORES ?= /2
-
 DOCKER_IMAGE_NAME ?= snapchange_example1
 
 all: test

@@ -9,17 +9,14 @@ base_images:
 	# Build the base snapchange image used for snapshotting
 	$(MAKE) -C ../../docker
 
-snapshot_image: Dockerfile.snapshot harness/test_cmpsolves harness/test_cmpsolves.cmps harness/test_cmpsolves.covbps
+snapshot_image: Dockerfile.snapshot
 	$(DOCKER) build -q -t $(DOCKER_IMAGE_NAME):snapshot . -f $< > $@
 
 snapshot: snapshot_image
 	$(DOCKER) run --rm -i \
 		-v $(shell realpath -m ./snapshot):/snapshot \
 		$(shell cat $<) >/dev/null 2>&1
-	cp harness/*cmps ./snapshot/
-	cp harness/*covbps ./snapshot/
-	cp harness/*analysis ./snapshot/
-	cp harness/config.toml ./snapshot/config.toml
+	cp ./harness/config.toml ./snapshot/config.toml
 
 fuzzer:
 	cargo build -r
