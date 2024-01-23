@@ -26,6 +26,8 @@
       in
         with pkgs; {
           devShells.default = mkShell {
+              LD_LIBRARY_PATH = lib.makeLibraryPath [ pkgs.stdenv.cc.cc ];
+
               packages = [
                 # Python
                 (python311.withPackages (ps: with ps; [
@@ -37,6 +39,7 @@
 
                 # Rust nightly
                 rust-bin.nightly.latest.default
+                rust-analyzer
               ];
 
               shellHook = ''
