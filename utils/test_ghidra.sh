@@ -1,4 +1,4 @@
-#!/bin/bash
+#!nix-shell -p openjdk
 
 usage() {
   echo "USAGE: $0 <FILENAME> <ADDDRESS>"

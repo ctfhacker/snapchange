@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # If the ghidra directory is not currently installed, install it
 if [ ! -d ./ghidra ]; then 

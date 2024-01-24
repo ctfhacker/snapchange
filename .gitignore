@@ -2,3 +2,4 @@ target
 examples/**/constants.rs
 examples/**/snapshot
 .venv
+utils/ghidra

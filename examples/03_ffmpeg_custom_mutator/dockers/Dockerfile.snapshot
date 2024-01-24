@@ -1,6 +1,6 @@
 FROM snapchange_example3:target as target
 
-FROM snapchange_snapshot
+FROM ctfhacker/snapchange_snapshot
 COPY --from=target / "$SNAPSHOT_INPUT"
 
 ENV SNAPSHOT_ENTRYPOINT=/opt/FFmpeg/ffmpeg 

@@ -16,10 +16,12 @@ snapshot: snapshot_image harness/example.c
 		-v $(shell realpath -m ./snapshot):/snapshot \
 		-e SNAPSHOT_IMGTYPE=initramfs \
 		$$(cat snapshot_image) >/dev/null 2>&1
+
 	# Remove odd dictionary entries just to speed up the example
 	find ./snapshot/dict -type f | grep -v cafe | grep -v dead | xargs rm
 	# Remove the unneeded angr covbps since we are using the sancov bps
 	rm snapshot/*angr.covbps
+
 	cp config.toml snapshot/
 
 fuzzer:

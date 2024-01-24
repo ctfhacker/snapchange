@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Install prereqs for the examples
 if [ ! -f $HOME/.cargo/bin/cargo ]; then

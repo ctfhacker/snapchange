@@ -16,9 +16,9 @@ MAKE_TARGETS="clean reset test"
 success=""
 failed=""
 
-scriptdir="$(dirname "$(realpath "$0")")"
-echo "INFO: Building snapchange base images"
-make -s -C "$scriptdir/../docker/" >/dev/null 2>&1 || err "failed to build docker base images"
+# scriptdir="$(dirname "$(realpath "$0")")"
+# echo "INFO: Building snapchange base images"
+# make -s -C "$scriptdir/../docker/" >/dev/null 2>&1 || err "failed to build docker base images"
 
 # Check that the example directories and Makefiles exist
 for dir in $DIRS; do
@@ -43,6 +43,8 @@ done
 
 # Make and test all included examples
 for dir in $DIRS; do
+    echo "Testing $dir"
+
     pushd "$dir" >/dev/null
 
     make --silent reset test
@@ -61,3 +63,9 @@ done
 echo "=== results ==="
 echo "success: $success"
 echo "failed: $failed"
+
+if [ -n "$failed" ]; then
+    exit 1
+else
+    exit 0
+fi

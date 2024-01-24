@@ -1,7 +1,7 @@
 ifeq ($(origin CC),default)
 CC = clang
 endif
-CFLAGS ?= -O3 -ggdb -fuse-ld=lld
+CFLAGS ?= -O3 -ggdb
 
 all: maze
 

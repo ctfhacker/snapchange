@@ -38,12 +38,10 @@ function setup_build {
         if [[ -e Makefile ]]; then
             make snapshot >/dev/null 2>&1
             STATUS=$?
-        elif [[ -e ./make_snapshot.sh ]]; then
-            ./make_snapshot.sh >/dev/null 2>&1
-            STATUS=$?
         else
             err "no script to create snapshot"
         fi
+
         if [[ "$STATUS" -gt 0 ]]; then
             err "failed to create snapshot"
         fi

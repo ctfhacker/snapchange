@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 rm Cargo.lock || true
 rm -rf snapshot || true
 rm -rf target || true
