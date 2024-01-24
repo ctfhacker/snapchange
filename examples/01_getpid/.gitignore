@@ -1,5 +1,4 @@
-dockers/snapshot_image
-dockers/target_image
+snapshot_image_hash
 *.min
 fuzzer.log
 snapshot

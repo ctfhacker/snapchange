@@ -10,6 +10,11 @@ if [[ -z "$TEMPLATE_OUT" ]]; then
   TEMPLATE_OUT=""
 fi
 
+# Extract the compressed files
+for file in ghidra.tar.gz QEMU.tar.gz linux.tar.gz; do
+  tar zxf /snapchange/$file -C /snapchange
+done
+
 source "$SNAPCHANGE_ROOT/utils/log.sh" || { echo "Failed to source $SNAPCHANGE_ROOT/utils/log.sh"; exit 1; }
 
 set -e

@@ -1,5 +1,5 @@
 ARG UBUNTU_VERSION=22.04
-FROM ubuntu:$UBUNTU_VERSION
+FROM ubuntu:$UBUNTU_VERSION as builder
 
 # Install prereqs
 ARG DEBIAN_FRONTEND=noninteractive 
@@ -35,9 +35,6 @@ ARG LINUX_VERSION=""
 ARG KASAN=0
 ENV KASAN="$KASAN"
 
-ARG BUSYBOX_STATIC="/busybox.static"
-ENV BUSYBOX_STATIC="$BUSYBOX_STATIC"
-
 ARG RZ_BUILD_FROM_SOURCE=0
 
 RUN echo "[+] installers:" \
@@ -53,9 +50,34 @@ RUN echo "[+] installers:" \
   && test -e /snapchange/vmlinux.kasan \
   && test -e /snapchange/linux.kasan.bzImage
 
+RUN cd /snapchange \
+  && GZIP=-9 tar cvzf ghidra.tar.gz ./ghidra \
+  && rm -rf ghidra \
+  && GZIP=-9 tar cvzf linux.tar.gz ./vmlinux ./vmlinux.kasan ./linux.bzImage ./linux.kasan.bzImage \
+  && rm vmlinux vmlinux.kasan linux.bzImage linux.kasan.bzImage \
+  && GZIP=-9 tar cvzf QEMU.tar.gz QEMU \
+  && rm -rf QEMU
+
 COPY ./utils /snapchange/utils
 COPY ./coverage_scripts /snapchange/coverage_scripts
 RUN chmod +x ./utils/*.sh && test -x utils/go.sh
+
+FROM ubuntu:$UBUNTU_VERSION
+COPY --from=builder /snapchange /snapchange
+COPY --from=builder /usr/local /usr/local
+
+# Install the following for runtime snapshotting:
+RUN apt-get update -q \
+  && apt-get install -y --no-install-recommends -q \
+     binutils \
+     busybox-static \
+     libguestfs-tools \
+     lz4 \
+     python3 \
+     python-is-python3 \
+     openjdk-17-jdk \ 
+  && apt-get clean -y \
+  && rm -rf /var/lib/apt/lists/*
 
 ENV SNAPCHANGE_ROOT="/snapchange/"
 
@@ -88,4 +110,8 @@ ENV TEMPLATE_OUT="$TEMPLATE_OUT"
 
 ENV SNAPSHOT_CHECK_FOR_GDB=1
 
+ARG BUSYBOX_STATIC="/busybox.static"
+ENV BUSYBOX_STATIC="$BUSYBOX_STATIC"
+
 ENTRYPOINT ["/snapchange/utils/go.sh"]
+

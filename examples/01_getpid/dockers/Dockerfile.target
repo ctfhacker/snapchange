@@ -1,4 +1,0 @@
-FROM ctfhacker/snapchange_base_target
-
-COPY harness/ /opt/
-RUN cd /opt/ && ls && make

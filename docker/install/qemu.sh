@@ -23,6 +23,11 @@ pushd build
 ../configure --target-list=x86_64-softmmu --enable-system --disable-werror --enable-virtfs
 make -j "$(nproc)"
 
+# Remove tests
+rm -rf tests
+rm pc-bios/edk2-arm*
+rm pc-bios/edk2-aarch64*
+
 # Return to the original directory
 popd
 popd
