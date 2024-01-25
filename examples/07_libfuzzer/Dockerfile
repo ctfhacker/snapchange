@@ -16,12 +16,12 @@ COPY ./harness/ /root/
 RUN cd /root/ && make clean && make
 
 ###################################################
-FROM snapchange
+FROM ctfhacker/snapchange_snapshot
 
 COPY --from=base / "$SNAPSHOT_INPUT"
 
 ENV SNAPSHOT_ENTRYPOINT=/root/example
 ENV SNAPSHOT_ENTRYPOINT_CWD="/tmp/"
 ENV SNAPSHOT_IMGTYPE=initramfs
-ENV COVERAGE_BREAKPOINT_COMMAND=angr
+ENV GENERATE_COVERAGE_BREAKPOINTS=1
 ENV LIBFUZZER=1

@@ -14,12 +14,12 @@ fi
 echo $(dirname $(realpath $0))/..
 
 UTILS=$(dirname $(realpath $0))
-DIR=GHIDRA_$(basename $1)
 FILENAME=$(realpath $1)
+FILEDIR=$(dirname $FILENAME)/$(basename $1)_ghidra
 ADDR=$2
 
 # Create the project directory
-mkdir $DIR || true
+mkdir $FILEDIR || true
 
 # Install ghidra
 pushd $UTILS
@@ -28,7 +28,7 @@ source ../docker/install/ghidra.sh
 echo "Gathering ghidra coverage/redqueen for $1 based at $2"
 
 ./ghidra/support/analyzeHeadless \
-  $DIR \
+  $FILEDIR \
   temp \
   -readOnly \
   -import \

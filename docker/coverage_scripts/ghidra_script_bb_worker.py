@@ -106,77 +106,15 @@ func_manager = currentProgram.getFunctionManager()
 
 # Create the output file for these basic blocks
 outfile = '{}.ghidra.covbps'.format(name)
-rq_outfile = '{}.ghidra.cmps'.format(name)
+rq_outfile_name = '{}.ghidra.cmps'.format(name)
 seen = []
 
 # Bad function substrings
 bad_funcs = ["asan", "msan", "ubsan", "sanitizer", "lsan", "lcov", "intercept", "sancov", "ioctl_table_fill"]
 
-# Write the basic blocks to the outfile
-with open(outfile, 'w') as f:
-    def write_blocks(blocks):
-        while blocks.hasNext():
-            block = blocks.next()
-            if block:
-                # Write the starting address of the basic block
-                address = block.getMinAddress().getOffset()
-                length = block.getMaxAddress().getOffset() - address
-                s = "0x%x,0x%x\n" % (address, length)
-                f.write(s)
+flat_api = FlatProgramAPI(currentProgram)
 
-    # Get the symbol table
-    symbolTable = currentProgram.getSymbolTable()
-    seen = []
-    # Iterate over all symbols in the symbol table
-    for symbol in symbolTable.getAllSymbols(True):
-        # Only keep function symbols
-        if symbol.getSymbolType() != ghidra.program.model.symbol.SymbolType.FUNCTION:
-            continue
-
-        # Get the function name
-        func_name = str(symbol)
-
-        seen.append(symbol.getAddress())
-
-        # Ignore this basic block if its function is in the bad list
-        if any(bad for bad in bad_funcs if bad in str(symbol.getObject()).lower()):
-            println("Ignoring bad func %s\n" % func_name)
-            continue
-
-        # Get the function entry for this symbol
-        func_entry = symbol.getProgramLocation().getAddress()
-
-        # Ensure there is actually a function for this symbol
-        func = func_manager.getFunctionAt(func_entry)
-        if func is None:
-            println("NO FUNC FOUND! %s\n" % func_name)
-            continue
-
-        # Found a valid function, dump the basic blocks for this function
-        println("Good func! %s\n" % func_name)
-        blocks = block_model.getCodeBlocksContaining(func.getBody(), monitor)
-        write_blocks(blocks)
-         
-
-listing = currentProgram.getListing()
-instrs = listing.getInstructions(True)
-       
-
-def get_register_name_and_size(varnode):
-    ''' Given a Register Varnode, return the name of the register '''
-    assert(isinstance(varnode, Varnode))
-    assert(varnode.getAddress().isRegisterAddress())
-
-    varnode_addr = varnode.getAddress()
-    # println("        Addr    %s" % varnode_addr)
-    # println("        Size    %s" % varnode_addr.getSize())
-    # println("        PtrSize %s" % varnode_addr.getPointerSize())
-    # println("        Offset  %s" % varnode_addr.getOffset())
-    if varnode_addr.isRegisterAddress():
-        reg_name = currentProgram.getRegister(varnode_addr).getName()
-        return (reg_name.lower(), varnode_addr.getPointerSize())
-    else:
-        assert(None)
+rq_outfile = open(rq_outfile_name, 'w')
 
 # Flags for determining whether to set the breakpoint on or after the given instruction
 # For example, we can't set the breakpoint on fucomip since it pops off the register stack,
@@ -202,6 +140,40 @@ REGISTER_CALLING_CONVENTION = {
     'reg rdi', 'reg rsi', 'reg rdx', 'reg rcx', 'reg r8', 'reg r9'
 }
 
+def flatten(data):
+    '''
+    Flatten a list of lists to a single list
+
+    Example:
+    Input  ['sub', ['load_from', ['add', u'reg rbp', '-0x20']], '0x4000'] 
+    Output ['sub', 'load_from', 'add', u'reg rbp', '-0x20', '0x4000'] 
+    '''
+    if not isinstance(data, list):
+        return [data]
+
+    res = []
+    for items in data:
+        if isinstance(items, list):
+            res += flatten(items)
+        else:
+            res.append(items)
+    return res
+
+def get_register_name_and_size(varnode):
+    ''' Given a Register Varnode, return the name of the register '''
+    assert(isinstance(varnode, Varnode))
+    assert(varnode.getAddress().isRegisterAddress())
+
+    varnode_addr = varnode.getAddress()
+    # println("        Addr    %s" % varnode_addr)
+    # println("        Size    %s" % varnode_addr.getSize())
+    # println("        PtrSize %s" % varnode_addr.getPointerSize())
+    # println("        Offset  %s" % varnode_addr.getOffset())
+    if varnode_addr.isRegisterAddress():
+        reg_name = currentProgram.getRegister(varnode_addr).getName()
+        return (reg_name.lower(), varnode_addr.getPointerSize())
+    else:
+        assert(None)
 
 def get_emulated_pcode(instr):
     ''' 
@@ -276,192 +248,234 @@ def get_emulated_pcode(instr):
 
     return emu
 
-def flatten(data):
-    '''
-    Flatten a list of lists to a single list
-
-    Example:
-    Input  ['sub', ['load_from', ['add', u'reg rbp', '-0x20']], '0x4000'] 
-    Output ['sub', 'load_from', 'add', u'reg rbp', '-0x20', '0x4000'] 
-    '''
-    if not isinstance(data, list):
-        return [data]
-
-    res = []
-    for items in data:
-        if isinstance(items, list):
-            res += flatten(items)
-        else:
-            res.append(items)
-    return res
-
-flat_api = FlatProgramAPI(currentProgram)
-      
 # Gather redqueen comparison rules
-with open(rq_outfile, 'w') as f:
-    instrs = listing.getInstructions(True)
+def gather_redqueen(instr):
+    func_name = ''
+    func = func_manager.getFunctionContaining(instr.getAddress())
+    if func != None:
+        func_name = func.getName()
+    else:
+        println("FINDME Instr not in func?! %s %s" % (instr, instr.getAddress()))
 
-    for instr in instrs:
-        func_name = ''
-        func = func_manager.getFunctionContaining(instr.getAddress())
-        if func != None:
-            func_name = func.getName()
-        else:
-            println("FINDME Instr not in func?! %s %s" % (instr, instr.getAddress()))
+    if any(bad for bad in bad_funcs if bad in func_name):
+        println("Skipping %s since it's in %s" % (instr, func_name))
+        return
 
-        if any(bad for bad in bad_funcs if bad in func_name):
-            println("Skipping %s since it's in %s" % (instr, func_name))
-            continue
+    # Cache the original instruction
+    orig_instr = instr
 
-        # Cache the original instruction
-        orig_instr = instr
+    op_str = instr.getMnemonicString()
+    # Ignore comparison instructions
+    if op_str not in cmps and op_str != 'CALL':
+        return
 
-        op_str = instr.getMnemonicString()
-        # Ignore comparison instructions
-        if op_str not in cmps and op_str != 'CALL':
-            continue
+    if op_str == "CALL":
+        # Check if this call is a hooked call like strcmp, memcmp, and memchr
+        target = instr.getOpObjects(0)[0]
+        if isinstance(target, Address):
+            symbol = flat_api.getSymbolAt(target).getName()
+            alias = FUNCTION_ALIASES.get(symbol)
+            if alias == None:
+                return
 
-        if op_str == "CALL":
-            # Check if this call is a hooked call like strcmp, memcmp, and memchr
-            target = instr.getOpObjects(0)[0]
-            if isinstance(target, Address):
-                symbol = flat_api.getSymbolAt(target).getName()
-                alias = FUNCTION_ALIASES.get(symbol)
-                if alias == None:
-                    continue
+            alias_name = ALIAS_NAME.get(alias)
+            size = "reg rdx"
+            if alias_name == "strcmp":
+                size = "0x0"
 
-                alias_name = ALIAS_NAME.get(alias)
-                size = "reg rdx"
-                if alias_name == "strcmp":
-                    size = "0x0"
+            rq_outfile.write("0x%s,%s,reg rdi,%s,reg rsi\n" % (instr.getAddressString(False, False), size, alias_name))
 
-                f.write("0x%s,%s,reg rdi,%s,reg rsi\n" % (instr.getAddressString(False, False), size, alias_name))
+        return
 
-            continue
+    println("-- Checking %s %s --" % (instr, instr.getAddressString(False, False)))
 
-        println("-- Checking %s %s --" % (instr, instr.getAddressString(False, False)))
+    # Get the addresses for this instruction and the next
+    bp_addr = instr.getAddressString(False, False)
+    next_bp_addr = instr.getNext().getAddressString(False, False)
 
-        # Get the addresses for this instruction and the next
-        bp_addr = instr.getAddressString(False, False)
-        next_bp_addr = instr.getNext().getAddressString(False, False)
+    # Get the pcode objects for the left and right operands
+    left_objs  = instr.getOpObjects(0)
+    right_objs = instr.getOpObjects(1)
 
-        # Get the pcode objects for the left and right operands
-        left_objs  = instr.getOpObjects(0)
-        right_objs = instr.getOpObjects(1)
+    # Get the operand type for each operand
+    left_op_type = instr.getOperandType(0)
+    right_op_type = instr.getOperandType(1)
 
-        # Get the operand type for each operand
-        left_op_type = instr.getOperandType(0)
-        right_op_type = instr.getOperandType(1)
+    # Check if the operands are an address or dynamic operand type to mark it as 'load_from'
+    left_is_addr = OperandType.isAddress(left_op_type) or OperandType.isDynamic(left_op_type)
+    right_is_addr = OperandType.isAddress(right_op_type) or OperandType.isDynamic(right_op_type)
+  
+    pcode_conditionals = [
+        "INT_EQUAL",
+        "INT_NOTEQUAL",
+        "INT_LESS",
+        "INT_SLESS",
+        "INT_LESSEQUAL",
+        "INT_SLESSEQUAL",
+        "INT_CARRY",
+        "INT_SCARRY",
+        "INT_BORROW",
+        "INT_SBORROW",
+    ]
 
-        # Check if the operands are an address or dynamic operand type to mark it as 'load_from'
-        left_is_addr = OperandType.isAddress(left_op_type) or OperandType.isDynamic(left_op_type)
-        right_is_addr = OperandType.isAddress(right_op_type) or OperandType.isDynamic(right_op_type)
-      
-        pcode_conditionals = [
-            "INT_EQUAL",
-            "INT_NOTEQUAL",
-            "INT_LESS",
-            "INT_SLESS",
-            "INT_LESSEQUAL",
-            "INT_SLESSEQUAL",
-            "INT_CARRY",
-            "INT_SCARRY",
-            "INT_BORROW",
-            "INT_SBORROW",
-        ]
+    is_float = False
 
-        is_float = False
+    # Use the maximal size found by the operands as the size for this comparison
+    size = 0
 
-        # Use the maximal size found by the operands as the size for this comparison
-        size = 0
-
-        # Get the size for the operation
-        # If floating point, hard code the size based on the operation,
-        # otherwise, use the largest size of the pcode
-        if 'UCOMISD' in op_str:
-            is_float = True
-            size = 0x8
-        elif 'UCOMISS' in op_str:
-            is_float = True
-            size = 0x4
-        elif op_str in ['FUCOMI', 'FUCOMIP', 'FCOMI', 'FCOMIP']:
-            is_float = True
-            size = 0xa
-        else:
-            for pcode in instr.getPcode():
-                if pcode.getMnemonic() in pcode_conditionals:
-                    for input in pcode.getInputs():
-                        size = max(size, input.getSize())
-        
-        # Look forward to the next instruction that uses the status flags
-        checked_flags = []
-        for _ in range(4):
-            next_instr = instr.getNext()
-            for pcode in next_instr.getPcode():
-                # println("  PCODE: %s" % pcode)
+    # Get the size for the operation
+    # If floating point, hard code the size based on the operation,
+    # otherwise, use the largest size of the pcode
+    if 'UCOMISD' in op_str:
+        is_float = True
+        size = 0x8
+    elif 'UCOMISS' in op_str:
+        is_float = True
+        size = 0x4
+    elif op_str in ['FUCOMI', 'FUCOMIP', 'FCOMI', 'FCOMIP']:
+        is_float = True
+        size = 0xa
+    else:
+        for pcode in instr.getPcode():
+            if pcode.getMnemonic() in pcode_conditionals:
                 for input in pcode.getInputs():
-                    # println("  INPUT: %s" % input)
-                    if input.isRegister():
-                        (name, reg_size) = get_register_name_and_size(input)
-                        # println("    -->: %s %s" % (name, size))
-                        if name in ['zf', 'cf', 'sf', 'of']:     # Is PF needed?
-                            # println("    --> FOUND: %s" % name)
-                            checked_flags.append(name)
-
-
-            # Found an instruction that uses the status flags. Use these
-            # flags as the conditions to use for this compare instruction
-            if len(checked_flags) > 0:
-                break
-
-            # Not found, go to the next instruction
-            instr = next_instr
-
-        if size > 0:
-            when_to_break = cmps[op_str]
-            if when_to_break & BREAK_ON > 0:
-                bp_addr = bp_addr
-            elif when_to_break & BREAK_AFTER > 0:
-                bp_addr = next_bp_addr
-       
-            # For each checked flag, add a specific rule for this
-            emu = get_emulated_pcode(orig_instr)
-            for flag in checked_flags:
-                # println("  EMU: %s" % (emu[flag]))
-                curr_value = emu[flag]
-                if 'UNUSED' in curr_value[0]:
-                    curr_value = curr_value[1]
-
-                [cmp, left, right] = curr_value
-                # println("  CMP: %s -- %s" % (cmp, flag))
-                # println("  left: %s" % left)
-                # println("  right: %s %s" % (right, type(right)))
-                assert('CMP' in cmp)
-
-                if right == 0x0 or right == '0x0':
-                    # For the case of comparing: 'rax & rbx == 0' or 'rax - rbx == 0'
-                    # Convert the equation just rax == rbx
-                    if left[0] in ['and', 'sub']:
-                        [new_cmp, new_left, new_right] = left
-                        left = new_left
-                        right = new_right
-
-                # Flatten the nested lists
-                left = ' '.join(flatten(left))
-                right = ' '.join(flatten(right))
-
-                # Quick check to make sure the comparison is an expected comparison
-                assert('CMP' in cmp)
-                line =  "0x%s,0x%x,%s,%s,%s" % (bp_addr, size, left, cmp, right)
-
-                # TODO(corydu): Is there a better way of finding xmm vs ymm in ghidra?
-                if size in [4, 8] and 'ymm' in line:
-                    line = line.replace("ymm", "xmm")
-
-                # println("   %s" % line)
-                f.write("%s\n" % line)
-        else:
-            raise Exception("ERROR: NO SIZE FOUND: %s" % bp_addr)
+                    size = max(size, input.getSize())
     
+    # Look forward to the next instruction that uses the status flags
+    checked_flags = []
+    for _ in range(4):
+        next_instr = instr.getNext()
+        for pcode in next_instr.getPcode():
+            # println("  PCODE: %s" % pcode)
+            for input in pcode.getInputs():
+                # println("  INPUT: %s" % input)
+                if input.isRegister():
+                    (name, reg_size) = get_register_name_and_size(input)
+                    # println("    -->: %s %s" % (name, size))
+                    if name in ['zf', 'cf', 'sf', 'of']:     # Is PF needed?
+                        # println("    --> FOUND: %s" % name)
+                        checked_flags.append(name)
+
+
+        # Found an instruction that uses the status flags. Use these
+        # flags as the conditions to use for this compare instruction
+        if len(checked_flags) > 0:
+            break
+
+        # Not found, go to the next instruction
+        instr = next_instr
+
+    if size > 0:
+        when_to_break = cmps[op_str]
+        if when_to_break & BREAK_ON > 0:
+            bp_addr = bp_addr
+        elif when_to_break & BREAK_AFTER > 0:
+            bp_addr = next_bp_addr
+   
+        # For each checked flag, add a specific rule for this
+        emu = get_emulated_pcode(orig_instr)
+        for flag in checked_flags:
+            # println("  EMU: %s" % (emu[flag]))
+            curr_value = emu[flag]
+            if 'UNUSED' in curr_value[0]:
+                curr_value = curr_value[1]
+
+            try:
+                [cmp, left, right] = curr_value
+            except Exception as e:
+                println("ERROR: %s" % (str(e)))
+                continue
+
+            # println("  CMP: %s -- %s" % (cmp, flag))
+            # println("  left: %s" % left)
+            # println("  right: %s %s" % (right, type(right)))
+            assert('CMP' in cmp)
+
+            if right == 0x0 or right == '0x0':
+                # For the case of comparing: 'rax & rbx == 0' or 'rax - rbx == 0'
+                # Convert the equation just rax == rbx
+                if left[0] in ['and', 'sub']:
+                    [new_cmp, new_left, new_right] = left
+                    left = new_left
+                    right = new_right
+
+            # Flatten the nested lists
+            left = ' '.join(flatten(left))
+            right = ' '.join(flatten(right))
+
+            # Quick check to make sure the comparison is an expected comparison
+            assert('CMP' in cmp)
+            line =  "0x%s,0x%x,%s,%s,%s" % (bp_addr, size, left, cmp, right)
+
+            # TODO(corydu): Is there a better way of finding xmm vs ymm in ghidra?
+            if size in [4, 8] and 'ymm' in line:
+                line = line.replace("ymm", "xmm")
+
+            # println("   %s" % line)
+            rq_outfile.write("%s\n" % line)
+    else:
+        raise Exception("ERROR: NO SIZE FOUND: %s" % bp_addr)
+
+# Write the basic blocks to the outfile
+with open(outfile, 'w') as f:
+    def write_blocks(blocks):
+        while blocks.hasNext():
+            block = blocks.next()
+            if block:
+                # Write the starting address of the basic block
+                address = block.getMinAddress().getOffset()
+                length = block.getMaxAddress().getOffset() - address
+                s = "0x%x,0x%x\n" % (address, length)
+                f.write(s)
+
+                addrs = block.getAddresses(block.getMinAddress(), True)
+                while addrs.hasNext():
+                    addr = addrs.next()
+                    if addr:
+                        instr = flat_api.getInstructionAt(addr)
+                        if instr:
+                            gather_redqueen(instr)
+
+
+    # Get the symbol table
+    symbolTable = currentProgram.getSymbolTable()
+    seen = []
+    # Iterate over all symbols in the symbol table
+    for symbol in symbolTable.getAllSymbols(True):
+        # Only keep function symbols
+        if symbol.getSymbolType() != ghidra.program.model.symbol.SymbolType.FUNCTION:
+            continue
+
+        # Get the function name
+        func_name = str(symbol)
+
+        seen.append(symbol.getAddress())
+
+        # Ignore this basic block if its function is in the bad list
+        if any(bad for bad in bad_funcs if bad in str(symbol.getObject()).lower()):
+            println("Ignoring bad func %s\n" % func_name)
+            continue
+
+        # Get the function entry for this symbol
+        func_entry = symbol.getProgramLocation().getAddress()
+
+        # Ensure there is actually a function for this symbol
+        func = func_manager.getFunctionAt(func_entry)
+        if func is None:
+            println("NO FUNC FOUND! %s\n" % func_name)
+            continue
+
+        # Found a valid function, dump the basic blocks for this function
+        println("Good func! %s\n" % func_name)
+        blocks = block_model.getCodeBlocksContaining(func.getBody(), monitor)
+        write_blocks(blocks)
+         
+
+listing = currentProgram.getListing()
+instrs = listing.getInstructions(True)
+       
+
+
+
 println("Basic blocks written to %s" % outfile)
-println("Redqueen rules written to %s" % rq_outfile)
+println("Redqueen rules written to %s" % rq_outfile_name)
