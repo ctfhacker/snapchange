@@ -23,6 +23,19 @@
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
+
+        # Patched QEMU
+        customQemu = pkgs.qemu.overrideAttrs (oldAttrs: {
+          patches = [ 
+            "${./docker/install/0001-Snapchange-patches.patch}"
+          ];
+          configureFlags = [
+            "--target-list=x86_64-softmmu"
+            "--enable-system"
+            "--disable-werror"
+            "--enable-virtfs"
+          ];
+        });
       in
         with pkgs; {
           devShells.default = mkShell {
@@ -40,6 +53,9 @@
                 # Rust nightly
                 rust-bin.nightly.latest.default
                 rust-analyzer
+
+                # Patched QEMU
+                customQemu
               ];
 
               shellHook = ''
