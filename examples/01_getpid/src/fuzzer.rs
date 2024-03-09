@@ -51,6 +51,9 @@ impl Fuzzer for Example1Fuzzer {
                 // via a `call`)
                 fuzzvm.fake_immediate_return()?;
 
+                let snapshot = fuzzvm.take_virtual_snapshot()?;
+                println!("{snapshot:x?}");
+
                 // Continue execution
                 Ok(Execution::Continue)
             },

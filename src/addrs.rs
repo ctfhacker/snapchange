@@ -6,7 +6,7 @@ use std::convert::TryInto;
 
 /// A physical address
 #[repr(transparent)]
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PhysAddr(pub u64);
 
 impl PhysAddr {

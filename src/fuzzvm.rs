@@ -42,6 +42,7 @@ use crate::stack_unwinder::{StackUnwinders, UnwindInfo};
 use crate::stats::{PerfMark, PerfStatTimer, Stats};
 use crate::symbols::Symbol;
 use crate::utils::save_input_in_project;
+use crate::virtual_snapshot::VirtualSnapshot;
 
 use crate::vbcpu::VbCpu;
 use crate::{handle_vmexit, Execution, SymbolList};
@@ -4878,6 +4879,91 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         } else {
             Ok(None)
         }
+    }
+
+    /// Take a snapshot in the middle of a fuzz run
+    pub fn take_virtual_snapshot(&mut self) -> Result<VirtualSnapshot> {
+        self.get_dirty_logs()?;
+
+        let _timer = self.scoped_timer(PerfMark::RestoreDirtyPages);
+
+        // Reset the scratch reset buffer
+        self.scratch_reset_buffer.clear();
+
+        // Gather all of the dirty pages together into the scratch_reset_buffer
+        for (slot, bitmap) in self.dirty_bitmaps.iter().enumerate() {
+            for (index, byte) in bitmap.iter().enumerate() {
+                // Quick continue if there are no available set bits in the current byte
+                if *byte == 0 {
+                    continue;
+                }
+
+                // Get the physical address for this memory region slot
+                let phys_addr = self.memory_regions[slot].guest_phys_addr;
+
+                for bit in 0..(std::mem::size_of_val(byte) * 8) {
+                    // Ignore this bit if it is not set
+                    if *byte & (1 << bit) == 0 {
+                        continue;
+                    }
+
+                    // Calculate the page index for this dirty bit
+                    let page_index = (index * 64 + bit) as u64;
+
+                    // Get the physical address that needs to be restored
+                    let curr_phys_addr = phys_addr + page_index * 0x1000;
+
+                    self.scratch_reset_buffer.push(curr_phys_addr);
+                }
+            }
+        }
+
+        // Grab the READ lock for the clean snapshot
+        let clean_snapshot = self.clean_snapshot.read().unwrap();
+        let backing = clean_snapshot.backing();
+        drop(clean_snapshot);
+
+        let addrs = self.scratch_reset_buffer.clone();
+
+        let mut memory = crate::FxIndexMap::default();
+
+        const STEP_SIZE: usize = 8;
+
+        // Reset the pages currently in the scratch reset buffer
+        for curr_phys_addr in addrs {
+            // Calculate the address into the memory and snapshot pages
+            let memory_addr = self.memory.backing() + curr_phys_addr;
+            let snapshot_addr = backing + curr_phys_addr;
+            for offset in (0..0x1000).step_by(STEP_SIZE) {
+                let curr_mem = unsafe { *((memory_addr + offset) as *const [u8; STEP_SIZE]) };
+                let clean_mem = unsafe { *((snapshot_addr + offset) as *const [u8; STEP_SIZE]) };
+
+                // If this memory address
+                if curr_mem != clean_mem {
+                    memory.insert(PhysAddr(curr_phys_addr + offset), curr_mem.to_vec());
+                }
+            }
+        }
+
+        println!(
+            "MEM: sections {} total bytes {}",
+            memory.keys().len(),
+            memory.keys().len() * STEP_SIZE
+        );
+
+        let virtual_snapshot = VirtualSnapshot {
+            memory,
+            regs: *self.regs(),
+            sregs: *self.sregs(),
+            fpu: self.fpu()?,
+        };
+
+        Ok(virtual_snapshot)
+    }
+
+    /// Restore the [`FuzzVm`] using then given [`VirtualSnapshot`]
+    pub fn restore_virtual_snapshot(&mut self, snapshot: &VirtualSnapshot) {
+        todo!();
     }
 }
 

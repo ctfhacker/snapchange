@@ -43,6 +43,9 @@ impl Fuzzer for Example02Fuzzer {
     }
 
     fn crash_breakpoints(&self) -> Option<&[AddressLookup]> {
+        None
+
+        /*
         Some(&[
             AddressLookup::SymbolOffset("tiffinfo!_ZN6__asanL12ReportGlobalERK13__asan_globalPKc", 0x0),
             AddressLookup::SymbolOffset("tiffinfo!_ZN6__asan18ReportDeadlySignalERKN11__sanitizer13SignalContextE", 0x0),
@@ -129,6 +132,7 @@ impl Fuzzer for Example02Fuzzer {
             AddressLookup::SymbolOffset("tiffinfo!__asan_report_store_n_noabort", 0x0),
             AddressLookup::SymbolOffset("tiffinfo!_ZN6__asanL21error_report_callbackE", 0x0),
         ])
+        */
     }
 
     fn set_input(
@@ -146,28 +150,43 @@ impl Fuzzer for Example02Fuzzer {
     }
 
     fn breakpoints(&self) -> Option<&[Breakpoint<Self>]> {
-        Some(&[Breakpoint {
-            lookup: AddressLookup::SymbolOffset("tiffinfo!_tiffReadProc", 0x0),
-            bp_type: BreakpointType::Repeated,
-            bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
-                let fd = fuzzvm.rdi();
-                let buf = fuzzvm.rsi();
-                let size = fuzzvm.rdx() as usize;
+        Some(&[
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("tiffinfo!_tiffReadProc", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let fd = fuzzvm.rdi();
+                    let buf = fuzzvm.rsi();
+                    let size = fuzzvm.rdx() as usize;
 
-                if input.len() < size {
-                    return Ok(Execution::Reset);
-                }
+                    if input.len() < size {
+                        return Ok(Execution::Reset);
+                    }
 
-                fuzzvm
-                    .write_bytes_dirty(VirtAddr(buf), fuzzvm.cr3(), &input[..size])
-                    .unwrap();
+                    fuzzvm
+                        .write_bytes_dirty(VirtAddr(buf), fuzzvm.cr3(), &input[..size])
+                        .unwrap();
 
-                fuzzvm.set_rax(size as u64);
+                    fuzzvm.set_rax(size as u64);
 
-                fuzzvm.fake_immediate_return().unwrap();
+                    fuzzvm.fake_immediate_return().unwrap();
 
-                Ok(Execution::Continue)
+                    Ok(Execution::Continue)
+                },
             },
-        }])
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset(
+                    "tiffinfo!_ZL13printf_commonPvPKcP13__va_list_tag",
+                    0x66c,
+                ),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let snapshot = fuzzvm.take_virtual_snapshot();
+                    // println!("{snapshot:x?}");
+
+                    Ok(Execution::Reset)
+                },
+            },
+        ])
     }
 }

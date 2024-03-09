@@ -391,6 +391,7 @@ run
 source $GDBPY
 ni
 ni
+detach
 quit
 
 EOF
@@ -453,6 +454,9 @@ x/16xb \$rip
 ni
 printf "Single step 3"
 x/16xb \$rip
+quit
+quit
+quit
 quit
 
 EOF

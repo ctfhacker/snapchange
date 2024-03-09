@@ -1,7 +1,9 @@
-FROM alpine:3.17 as base
+# FROM alpine:3.17 as base
 
-RUN apk add --no-cache --initramfs-diskless-boot python3 gdb curl tar build-base perf \
-    nasm gcc git musl-dbg clang compiler-rt llvm
+# RUN apk add --no-cache --initramfs-diskless-boot python3 gdb curl tar build-base perf \ nasm gcc git musl-dbg clang compiler-rt llvm
+
+FROM ubuntu as base
+RUN apt update && apt install -y python3 gdb curl tar nasm gcc git clang llvm wget make
 
 COPY 0001-snapshot.patch /opt
 RUN cd /opt/ && \
