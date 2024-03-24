@@ -8,15 +8,18 @@ use std::collections::BTreeMap;
 
 /// Possible errors for this emulated file system
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Given an invalid file descriptor
+    #[error("Invalid file descriptor")]
     FileDescriptor,
 
     /// Received an invalid internal index
+    #[error("Invalid internal index")]
     InternalIndex,
 
     /// Calculated an invalid length for a data slice
+    #[error("Invalid length for data slice")]
     SliceLength,
 }
 
@@ -24,9 +27,28 @@ pub enum Error {
 #[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// File stat information
+#[repr(C)]
+#[derive(Default, Debug)]
+pub struct Stat {
+    st_dev: u64,
+    st_ino: u64,
+    st_mode: u32,
+    st_nlink: u64,
+    st_uid: u32,
+    st_gid: u32,
+    st_rdev: u64,
+    st_size: i64,
+    st_blksize: i64,
+    st_blocks: i64,
+    st_atime: i64,
+    st_mtime: i64,
+    st_ctime: i64,
+}
+
 /// Emulated filesystem used to perform file operations based on a file descriptor
 #[allow(dead_code)]
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct FileSystem {
     /// Filenames of available files
     names: Vec<String>,
@@ -44,9 +66,31 @@ pub struct FileSystem {
     next_custom_fd: u64,
 }
 
+impl std::default::Default for FileSystem {
+    fn default() -> Self {
+        Self {
+            names: Vec::new(),
+            data: Vec::new(),
+            offsets: Vec::new(),
+            fd_to_index: BTreeMap::new(),
+            next_custom_fd: 0xcd_0000,
+        }
+    }
+}
+
 impl FileSystem {
+    /// Add a new file with `name` and `data` to the filesystem and return the created file descriptor
+    pub fn new_file(&mut self, name: String, data: Vec<u8>) -> u64 {
+        self.new_file_with_fd(None, name, data)
+    }
+
+    /// Reset the filesystem to an empty state
+    pub fn reset(&mut self) {
+        *self = FileSystem::default();
+    }
+
     /// Add a new file with descriptor `fd`, `name`, and `data` to the filesystem
-    pub fn new_file(&mut self, mut fd: Option<u64>, name: String, data: Vec<u8>) {
+    pub fn new_file_with_fd(&mut self, mut fd: Option<u64>, name: String, data: Vec<u8>) -> u64 {
         if fd.is_none() {
             fd = Some(self.next_custom_fd);
             self.next_custom_fd += 1;
@@ -81,6 +125,8 @@ impl FileSystem {
             self.data.push(data);
             self.offsets.push(0);
         }
+
+        fd
     }
 
     /// Get the internal index for this file desscriptor
@@ -207,5 +253,15 @@ impl FileSystem {
 
         // Return the data slice
         Ok(())
+    }
+
+    /// Get the `stat` structure for the given `fd`
+    pub fn fstat(&mut self, fd: u64) -> Result<Stat> {
+        let mut stat = Stat::default();
+
+        let bytes = self.get(fd)?;
+        stat.st_size = bytes.len() as i64;
+
+        Ok(stat)
     }
 }
