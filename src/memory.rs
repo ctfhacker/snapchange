@@ -1033,9 +1033,7 @@ impl Memory {
             let phys_addr = translation
                 .phys_addr()
                 .ok_or(Error::WriteToUnmappedVirtualAddress(
-                    *virt_addr,
-                    cr3,
-                    0x4444_0000_0000_0000 + offset,
+                    *virt_addr, cr3, offset,
                 ))?;
 
             let size = usize::try_from(*size).unwrap();
