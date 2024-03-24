@@ -415,7 +415,7 @@ set pagination off
 set environment ASAN_OPTIONS=detect_leaks=0
 
 # Stop at the first chance in the target in order to enable the breakpoint on $SNAPSHOT_FUNCTION
-start
+starti
 del *
 
 $SANITIZER_FUNCTIONS
@@ -443,6 +443,9 @@ x/16xb $SNAPSHOT_FUNCTION
 
 # Continue execution until the $SNAPSHOT_FUNCTION and take the snapshot as normal
 continue
+x/16xb \$rip
+x/16xb $SNAPSHOT_FUNCTION
+
 printf "Sourcing gdb script\n"
 source $GDBPY
 printf "Single step 1"
