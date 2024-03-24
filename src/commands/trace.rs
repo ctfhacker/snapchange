@@ -96,6 +96,9 @@ fn start_core<FUZZER: Fuzzer>(
         redqueen_breakpoints,
     )?;
 
+    fuzzvm.binaries = Some(binaries.clone());
+    fuzzvm.modules = Some(modules.clone());
+
     // Enable single step for tracing
     if single_step {
         log::info!("Single step trace");
