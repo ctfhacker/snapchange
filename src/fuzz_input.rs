@@ -763,7 +763,7 @@ impl FuzzInput for Vec<u8> {
 /// The mode to get redqueen rule candidates for Vec<u8>
 #[cfg(feature = "redqueen")]
 #[derive(Copy, Clone, Eq, PartialEq)]
-enum GetRuleMode {
+pub enum GetRuleMode {
     /// Return from the function after the first found candidate
     Fast,
 
@@ -916,7 +916,7 @@ impl Default for BytesMinimizeState {
 }
 
 /// Endianness for the redqueen rules
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Endian {
     /// Little endian
     Little,
