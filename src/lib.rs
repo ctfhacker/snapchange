@@ -97,7 +97,6 @@
 #![feature(trait_alias)]
 #![feature(thread_id_value)]
 #![feature(map_try_insert)]
-#![feature(stdsimd)]
 #![feature(avx512_target_feature)]
 #![feature(core_intrinsics)]
 #![feature(associated_type_defaults)]
@@ -185,7 +184,7 @@ mod commands;
 mod coverage_analysis;
 pub mod expensive_mutators;
 pub mod feedback;
-mod filesystem;
+pub mod filesystem;
 pub mod fuzz_input;
 pub mod mutators;
 
