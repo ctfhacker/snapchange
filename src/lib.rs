@@ -104,6 +104,7 @@
 #![feature(path_file_prefix)]
 #![feature(iter_array_chunks)]
 #![feature(stmt_expr_attributes)]
+#![feature(lazy_cell)]
 #![allow(rustdoc::invalid_rust_codeblocks)]
 #![allow(internal_features)]
 #![deny(missing_docs)]
@@ -155,7 +156,7 @@ pub use msr::Msr;
 mod page_table;
 
 pub mod fuzzer;
-pub use fuzzer::Fuzzer;
+pub use fuzzer::{Fuzzer, NetFileFuzzer};
 
 mod symbols;
 pub use symbols::Symbol;

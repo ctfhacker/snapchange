@@ -16,6 +16,7 @@ serde_json = "1.0.114"
 serde      = "1.0.197"
 rustc-hash = "1.1.0"
 clap       = { version = "4.1.8", features = ["derive"] }
+rmp-serde = "1.1.2"
 
 [build-dependencies]
 regex = "1"
