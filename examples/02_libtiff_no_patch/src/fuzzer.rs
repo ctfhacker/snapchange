@@ -19,7 +19,7 @@ use snapchange::cmp_analysis::RedqueenRule;
 use snapchange::filesystem::FileSystem;
 use snapchange::fuzz_input::{Endian, GetRuleMode, InputWithMetadata};
 use snapchange::fuzzer::{
-    AddressLookup, Breakpoint, BreakpointType, Fuzzer, InputFromAnywhere, NetFileFuzzer,
+    AddressLookup, Breakpoint, BreakpointType, InputFromAnywhere, InputlessFuzzer, NetFileFuzzer,
 };
 use snapchange::fuzzvm::FuzzVm;
 use snapchange::linux;
@@ -34,20 +34,11 @@ const CR3: Cr3 = Cr3(constants::CR3);
 #[derive(Default)]
 pub struct TiffInfoFuzzer {}
 
-impl Fuzzer for TiffInfoFuzzer {
-    type Input = InputFromAnywhere;
+impl InputlessFuzzer for TiffInfoFuzzer {
     const START_ADDRESS: u64 = constants::RIP;
     const MAX_INPUT_LENGTH: usize = 0x10000;
 
     fn reset_breakpoints(&self) -> Option<&[AddressLookup]> {
         Some(&[AddressLookup::SymbolOffset("tiffinfo!TIFFErrorExt", 0x0)])
-    }
-
-    fn set_input(
-        &mut self,
-        input: &InputWithMetadata<Self::Input>,
-        fuzzvm: &mut FuzzVm<Self>,
-    ) -> Result<()> {
-        Ok(())
     }
 }

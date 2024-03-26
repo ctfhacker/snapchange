@@ -4,4 +4,4 @@ mod fuzzer;
 mod net_file_fuzzer;
 
 pub use fuzzer::*;
-pub use net_file_fuzzer::{InputFromAnywhere, NetFileFuzzer};
+pub use net_file_fuzzer::{InputFromAnywhere, InputlessFuzzer, NetFileFuzzer};

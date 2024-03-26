@@ -237,16 +237,109 @@ impl FuzzInput for InputFromAnywhere {
 /// Fuzzer where the fuzzed inputs are automatically handled from file operations (read) and
 /// network operations (recv)
 #[derive(Default)]
-pub struct NetFileFuzzer<T: Fuzzer> {
+pub struct NetFileFuzzer<T: InputlessFuzzer> {
     target_fuzzer: T,
 }
 
-impl<FUZZER: Fuzzer<Input = InputFromAnywhere>> Fuzzer for NetFileFuzzer<FUZZER> {
+/// A fuzzer whose inputs come from files/network and are not specifically set by the fuzzer itself
+pub trait InputlessFuzzer: Default {
+    /// The maximum length for an input used to truncate long inputs.
+    const MAX_INPUT_LENGTH: usize;
+
+    /// The minimum length for an input
+    const MIN_INPUT_LENGTH: usize = 1;
+
+    /// The expected starting address of the snapshot for this fuzzer. This is a
+    /// sanity check to ensure the fuzzer matches the given snapshot.
+    const START_ADDRESS: u64;
+
+    /// Maximum number of mutation functions called during mutation
+    const MAX_MUTATIONS: u64 = 16;
+
+    /// Reset the state of the current fuzzer
+    fn reset_fuzzer_state(&mut self) {
+        // By default, resetting fuzzer state does nothing
+    }
+
+    /// Set of syscalls the fuzzer will manually handle, while ignoring all others.
+    /// Cannot be used with `syscall_blacklist`
+    fn syscall_whitelist(&self) -> &'static [u64] {
+        &[]
+    }
+
+    /// Set of syscalls the fuzzer will manually NOT handle, while handling all others.
+    /// Cannot be used with `syscall_whitelist`
+    fn syscall_blacklist(&self) -> &'static [u64] {
+        &[]
+    }
+
+    /// One-time initialization of the snapshot
+    ///
+    /// # Errors
+    ///
+    /// * The target specific fuzzer failed to initialize the VM
+    fn init_snapshot(&mut self, _fuzzvm: &mut FuzzVm<NetFileFuzzer<Self>>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Initialize the VM before starting any fuzz case
+    ///
+    /// # Errors
+    ///
+    /// * The target specific fuzzer failed to initialize the VM
+    fn init_vm(&mut self, _fuzzvm: &mut FuzzVm<NetFileFuzzer<Self>>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Addresses or symbols that, if hit, trigger execution of a callback function.  All
+    /// symbols are checked to see if they contain the given symbol substring.
+    fn breakpoints(&self) -> Option<&[Breakpoint<NetFileFuzzer<Self>>]> {
+        None
+    }
+
+    /// Breakpoints that, if hit, will cause the VM to be reset without saving state
+    fn reset_breakpoints(&self) -> Option<&[AddressLookup]> {
+        None
+    }
+
+    /// Breakpoints that, if hit, will cause the VM to be reset while saving input and
+    /// state
+    fn crash_breakpoints(&self) -> Option<&[AddressLookup]> {
+        None
+    }
+
+    /// Fuzzer specific handling of a crashing `input` bytes with the [`FuzzVm`] that
+    /// originally will write to `crash_file`. Defaults to nothing.
+    ///
+    /// # Errors
+    ///
+    /// * The target specific fuzzer failed to handle a crashing input
+    fn handle_crash(
+        &self,
+        _input: &InputWithMetadata<<NetFileFuzzer<Self> as Fuzzer>::Input>,
+        _fuzzvm: &mut FuzzVm<NetFileFuzzer<Self>>,
+        _crash_file: &Path,
+    ) -> Result<()> {
+        // No action by default
+        Ok(())
+    }
+
+    /// Initialize files available to the guest
+    ///
+    /// # Errors
+    ///
+    /// * The target specific fuzzer failed to initialize a filesystem
+    fn init_files(&self, _fs: &mut FileSystem) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
     type Input = InputFromAnywhere;
-    const START_ADDRESS: u64 = FUZZER::START_ADDRESS;
-    const MIN_INPUT_LENGTH: usize = FUZZER::MIN_INPUT_LENGTH;
-    const MAX_INPUT_LENGTH: usize = FUZZER::MAX_INPUT_LENGTH;
-    const MAX_MUTATIONS: u64 = FUZZER::MAX_MUTATIONS;
+    const START_ADDRESS: u64 = F::START_ADDRESS;
+    const MIN_INPUT_LENGTH: usize = F::MIN_INPUT_LENGTH;
+    const MAX_INPUT_LENGTH: usize = F::MAX_INPUT_LENGTH;
+    const MAX_MUTATIONS: u64 = F::MAX_MUTATIONS;
 
     fn init_snapshot(&mut self, _fuzzvm: &mut FuzzVm<Self>) -> Result<()> {
         // Init the list of known files
@@ -266,7 +359,7 @@ impl<FUZZER: Fuzzer<Input = InputFromAnywhere>> Fuzzer for NetFileFuzzer<FUZZER>
     fn set_input(
         &mut self,
         input: &InputWithMetadata<Self::Input>,
-        fuzzvm: &mut FuzzVm<NetFileFuzzer<FUZZER>>,
+        fuzzvm: &mut FuzzVm<NetFileFuzzer<F>>,
     ) -> Result<()> {
         for filename in &input.file_names {
             KNOWN_FILES.lock().unwrap().insert(filename.clone());
@@ -350,17 +443,23 @@ impl<FUZZER: Fuzzer<Input = InputFromAnywhere>> Fuzzer for NetFileFuzzer<FUZZER>
                         fuzzvm.translate(VirtAddr(buf + bytes.len() as u64 - 1), fuzzvm.cr3());
 
                     if translation.phys_addr().is_none() {
+                        /*
                         log::error!(
                             "NOT ALLOC buf: {buf:#x}..{:#x} bytes len {:#x}",
                             buf + bytes.len() as u64,
                             bytes.len()
                         );
+                        */
 
                         fuzzvm.filesystem = Some(filesystem);
 
+                        /*
                         return Ok(Execution::CrashReset {
                             path: format!("notalloc_buf_{:#x}_size_{:#x}", buf, read_bytes),
                         });
+                        */
+
+                        return Ok(Execution::Continue);
                     }
 
                     if let Err(e) = fuzzvm.write_bytes_dirty(VirtAddr(buf), fuzzvm.cr3(), bytes) {
@@ -410,16 +509,24 @@ impl<FUZZER: Fuzzer<Input = InputFromAnywhere>> Fuzzer for NetFileFuzzer<FUZZER>
                     let stat_buf = fuzzvm.rsi();
 
                     // Get the stats struct for this fd
-                    let stats = fuzzvm.filesystem.as_mut().unwrap().fstat(fd)?;
+                    let Ok(stats) = fuzzvm.filesystem.as_mut().unwrap().fstat(fd) else {
+                        return Ok(Execution::Reset);
+                    };
 
                     // Write the stats struct to the buffer
-                    fuzzvm.write(VirtAddr(stat_buf), fuzzvm.cr3(), stats)?;
+                    match fuzzvm.write(VirtAddr(stat_buf), fuzzvm.cr3(), stats) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            println!("Write err: {e:?}");
+                            return Ok(Execution::Reset);
+                        }
+                    }
 
                     // Return success
                     fuzzvm.set_rax(0);
 
                     // Immediately return from this function
-                    fuzzvm.fake_immediate_return().unwrap();
+                    fuzzvm.fake_immediate_return()?;
 
                     Ok(Execution::Continue)
                 },
