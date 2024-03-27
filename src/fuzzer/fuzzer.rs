@@ -305,6 +305,21 @@ pub trait Fuzzer: Default + Sized {
         Ok(())
     }
 
+    /// Fuzzer specific handling of opening a new file. Used primarily for `InputlessFuzzer` to
+    /// know which files to create on mutation/generation.
+    ///
+    /// # Errors
+    ///
+    /// * The target specific fuzzer failed to handle the new path
+    fn handle_opened_file(
+        &self,
+        _input: &mut InputWithMetadata<Self::Input>,
+        _opened_file: &str,
+    ) -> Result<()> {
+        // No action by default
+        Ok(())
+    }
+
     /// Fuzzer specific handling of `snapchange -p <PROJECT> trace testcase`
     ///
     /// # Errors

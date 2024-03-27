@@ -1125,10 +1125,30 @@ fn start_core<FUZZER: Fuzzer>(
                 execution = Execution::TimeoutReset;
             }
 
+            // Allow the fuzzer to handle new opened files
+            if let Execution::OpenedNewFileReset { path } = &execution {
+                // Add this path to the input's known files
+                fuzzer.handle_opened_file(&mut input, path)?;
+
+                // In order to save this input (with the new opened file), we need to add feedback
+                // somehow. Currently, fake a virtual address
+                // TODO(corydu): Should we default to using `feedback::custom_feedback` here and just use that?
+                let path_hash = crate::utils::calculate_hash(path);
+                feedback.record_codecov(VirtAddr(
+                    (path_hash & 0x0000_ffff_ffff_ffff) | 0xcdcd_0000_0000_0000,
+                ));
+
+                // Add a mutation log saying this input was added because it opened a new file
+                input.add_mutation(format!("Opened new file: {path}"));
+            }
+
             // Reset the VM if requested
             if matches!(
                 execution,
-                Execution::Reset | Execution::CrashReset { .. } | Execution::TimeoutReset
+                Execution::Reset
+                    | Execution::CrashReset { .. }
+                    | Execution::TimeoutReset
+                    | Execution::OpenedNewFileReset { .. }
             ) {
                 break;
             }

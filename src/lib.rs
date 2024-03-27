@@ -262,15 +262,29 @@ pub enum Execution {
 
     /// Reset the VM state and continue execution to the beginning of the snapshot
     Reset,
+
+    /// Reset when the VM opens a previously unknown file for the first time
+    OpenedNewFileReset {
+        /// The path of the file opened
+        path: String,
+    },
 }
 
 impl Execution {
     /// Returns true if the given Execution state is a crash.
     pub fn is_crash(&self) -> bool {
-        match &self {
-            Self::CrashReset { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::CrashReset { .. })
+    }
+
+    /// Returns true if the given Execution state causes the VM to reset
+    pub fn is_reset(&self) -> bool {
+        matches!(
+            self,
+            Self::Reset
+                | Self::CrashReset { .. }
+                | Self::TimeoutReset
+                | Self::OpenedNewFileReset { .. }
+        )
     }
 }
 

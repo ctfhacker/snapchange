@@ -25,8 +25,6 @@ use crate::prelude::*;
 use crate::Execution;
 use crate::FuzzInput;
 
-static KNOWN_FILES: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-
 #[derive(Debug)]
 pub enum RedqueenCandidate {
     File {
@@ -50,6 +48,9 @@ pub struct InputFromAnywhere {
     /// The data for the fuzzed files in this input
     pub file_datas: Vec<Vec<u8>>,
 
+    /// The names of fuzzed sockets in this input
+    pub sockets: Vec<String>,
+
     /// The initial file from ./snapshot/input. At the beginning of the fuzz run, we don't know
     /// what this input could mean (a file, a packet, ect). So we store it here and use it as
     /// part of a mutation later on
@@ -69,6 +70,7 @@ impl FuzzInput for InputFromAnywhere {
             Err(_) => Ok(Self {
                 file_names: Vec::new(),
                 file_datas: Vec::new(),
+                sockets: Vec::new(),
                 starting_input: bytes.to_vec(),
             }),
         };
@@ -92,27 +94,44 @@ impl FuzzInput for InputFromAnywhere {
         min_length: usize,
         max_length: usize,
     ) -> InputWithMetadata<Self> {
-        let mut file_names = Vec::new();
+        let mut file_names: Vec<String> = Vec::new();
         let mut file_datas = Vec::new();
+        let mut sockets = Vec::new();
 
-        // Generate random file data for each known file name
-        for filename in KNOWN_FILES.lock().unwrap().iter() {
-            file_names.push(filename.clone());
-
-            file_datas.push(
-                <Vec<u8> as FuzzInput>::generate(&[], rng, &None, min_length, max_length).input,
-            );
-        }
-
+        // Choose a random starting input if there is one from the corpus
         let starting_input = if corpus.is_empty() {
             Vec::new()
         } else {
             corpus.choose(rng).unwrap().starting_input.clone()
         };
 
+        // Attempt to fill in some file information from other files in the corpus
+        for _ in 0..4 {
+            if let Some(other_input) = corpus.choose(rng) {
+                if other_input.file_names.is_empty() {
+                    continue;
+                }
+
+                // Choose a random file in this other input
+                let random_file = rng.gen_range(0..other_input.file_names.len());
+
+                // Check if this new input already knows about this file
+                let filename = &other_input.file_names[random_file];
+                if file_names.contains(&filename) {
+                    continue;
+                }
+
+                // If not, add the filedata to this input to be mutated later
+                let filedata = &other_input.file_datas[random_file];
+                file_names.push(filename.clone());
+                file_datas.push(filedata.clone());
+            }
+        }
+
         InputWithMetadata::from_input(Self {
             file_names,
             file_datas,
+            sockets,
             starting_input,
         })
     }
@@ -129,20 +148,16 @@ impl FuzzInput for InputFromAnywhere {
     ) -> Vec<String> {
         let mut mutations = Vec::new();
 
-        for filename in KNOWN_FILES.lock().unwrap().iter() {
-            // Check if this input has this known file to fuzz
-            if !input.file_names.contains(&filename) {
-                // Input does not have this file, generate random file data for this file
-                input.file_names.push(filename.clone());
-
-                // If there is a `starting_input`, randomly choose that one instead of a random Vec<u8>
-                if !input.starting_input.is_empty() && rng.next() % 10 == 2 {
-                    input.file_datas.push(input.starting_input.clone())
-                } else {
-                    input.file_datas.push(
-                        <Vec<u8> as FuzzInput>::generate(&[], rng, &None, min_length, max_length)
-                            .input,
-                    );
+        // Randomly add new files from other files in the corpus
+        for _ in 0..rng.gen_range(1..8) {
+            if let Some(other_file) = corpus.choose(rng) {
+                for (index, file_name) in other_file.file_names.iter().enumerate() {
+                    // Small chance to add another input's file and data to this input
+                    if !input.file_names.contains(&file_name) && rng.gen_bool(1.0 / 32.0) {
+                        let file_data = other_file.file_datas[index].clone();
+                        input.file_names.push(file_name.clone());
+                        input.file_datas.push(file_data.clone());
+                    }
                 }
             }
         }
@@ -161,6 +176,7 @@ impl FuzzInput for InputFromAnywhere {
                 min_length,
                 max_length,
                 max_mutations,
+                #[cfg(feature = "redqueen")]
                 redqueen_rules,
             );
         }
@@ -324,6 +340,20 @@ pub trait InputlessFuzzer: Default {
         Ok(())
     }
 
+    /// Fuzzer specific handling of opening a new file. Used primarily for `InputlessFuzzer` to
+    /// know which files to create on mutation/generation.
+    ///
+    /// # Errors
+    ///
+    /// * The target specific fuzzer failed to handle the new path
+    fn handle_opened_file(
+        &self,
+        _input: &InputWithMetadata<<NetFileFuzzer<Self> as Fuzzer>::Input>,
+        _opened_file: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Initialize files available to the guest
     ///
     /// # Errors
@@ -361,10 +391,6 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
         input: &InputWithMetadata<Self::Input>,
         fuzzvm: &mut FuzzVm<NetFileFuzzer<F>>,
     ) -> Result<()> {
-        for filename in &input.file_names {
-            KNOWN_FILES.lock().unwrap().insert(filename.clone());
-        }
-
         // The snapshot was taken at `main+4`. Restore current RIP back to the original RIP.
         fuzzvm.set_rip(fuzzvm.rip() - 4);
 
@@ -387,9 +413,10 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
 
                     // If this is the first time seeing this open file, add this filename to the
                     // list of input files to generate. This will be picked up when these
-                    if KNOWN_FILES.lock().unwrap().insert(filename.clone()) {
-                        log::info!("New file found! {filename}");
-                        return Ok(Execution::Reset);
+                    if !input.file_names.contains(&filename) {
+                        return Ok(Execution::OpenedNewFileReset {
+                            path: filename.clone(),
+                        });
                     }
 
                     for (input_filename, bytes) in
@@ -443,22 +470,7 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
                         fuzzvm.translate(VirtAddr(buf + bytes.len() as u64 - 1), fuzzvm.cr3());
 
                     if translation.phys_addr().is_none() {
-                        /*
-                        log::error!(
-                            "NOT ALLOC buf: {buf:#x}..{:#x} bytes len {:#x}",
-                            buf + bytes.len() as u64,
-                            bytes.len()
-                        );
-                        */
-
                         fuzzvm.filesystem = Some(filesystem);
-
-                        /*
-                        return Ok(Execution::CrashReset {
-                            path: format!("notalloc_buf_{:#x}_size_{:#x}", buf, read_bytes),
-                        });
-                        */
-
                         return Ok(Execution::Continue);
                     }
 
@@ -544,7 +556,6 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
         let output = crash_file.with_extension("inputs");
 
         // Create the output directory
-        log::warn!("OUTPUT DIR: {output:?}");
         std::fs::create_dir_all(&output);
 
         // Write all fuzzed files into the output directory structure
@@ -559,6 +570,23 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
                 log::error!("Failed to write crash file: {file:?}");
             }
         }
+
+        Ok(())
+    }
+
+    fn handle_opened_file(
+        &self,
+        input: &mut InputWithMetadata<Self::Input>,
+        opened_file: &str,
+    ) -> Result<()> {
+        // Allow the target fuzzer to handle opened files
+        self.target_fuzzer.handle_opened_file(input, opened_file)?;
+
+        // If this input doesn't currently know about this
+        input.file_names.push(opened_file.to_string());
+
+        let starting_input = input.starting_input.clone();
+        input.file_datas.push(starting_input);
 
         Ok(())
     }
