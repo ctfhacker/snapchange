@@ -937,7 +937,6 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
 
         // Initialize the network with packets from the fuzzer
         let mut network = Network::default();
-        fuzzer.init_packets(&mut network)?;
         fuzzvm.network = Some(network);
 
         // Add a breakpoint to LSTAR which is caught during `syscall` execution to
