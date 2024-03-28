@@ -156,7 +156,10 @@ pub use msr::Msr;
 mod page_table;
 
 pub mod fuzzer;
-pub use fuzzer::{Fuzzer, NetFileFuzzer};
+pub use fuzzer::Fuzzer;
+
+#[cfg(feature = "netfile")]
+pub use fuzzer::NetFileFuzzer;
 
 mod symbols;
 pub use symbols::Symbol;
@@ -188,6 +191,7 @@ pub mod feedback;
 pub mod filesystem;
 pub mod fuzz_input;
 pub mod mutators;
+pub mod network;
 
 mod stats_tui;
 pub mod utils;

@@ -21,6 +21,7 @@ use crate::filesystem::FileSystem;
 use crate::fuzz_input::{FuzzInput, InputMetadata, InputWithMetadata};
 use crate::fuzzvm::{FuzzVm, HookFn};
 use crate::mutators;
+use crate::network::Network;
 use crate::rng::Rng;
 use crate::Execution;
 
@@ -86,7 +87,7 @@ pub enum ResetBreakpointType {
 }
 
 /// How to lookup a given virtual address in the snapshot memory
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub enum AddressLookup {
     /// The direct virtual address

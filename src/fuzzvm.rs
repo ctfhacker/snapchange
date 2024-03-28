@@ -36,6 +36,7 @@ use crate::interrupts::IdtEntry;
 use crate::linux::{PtRegs, Signal};
 use crate::memory::{ChainVal, Memory, WriteMem};
 use crate::msr::Msr;
+use crate::network::Network;
 use crate::page_table::Translation;
 use crate::rng::Rng;
 use crate::stack_unwinder::{StackUnwinders, UnwindInfo};
@@ -75,7 +76,7 @@ pub const APIC_BASE: u64 = 0xfee0_0000;
 pub const TSS_BASE: u64 = 0xfffb_d000;
 
 /// The CR3 used to signify any possible CR3 for a virutal address
-pub(crate) const WILDCARD_CR3: Cr3 = Cr3(0x1234_1234_1234_1234);
+pub(crate) const WILDCARD_CR3: Cr3 = Cr3(0x1234_1234_1234_0000);
 
 /// Sets the type of memory (dirty or not) for a given breakpoint. This is primarily used
 /// for coverage breakpoints that have a very expensive cost to reset all coverage
@@ -576,6 +577,9 @@ pub struct FuzzVm<'a, FUZZER: Fuzzer> {
     /// Emulated filesystem
     pub filesystem: Option<FileSystem>,
 
+    /// Emulated network
+    pub network: Option<Network>,
+
     /// Fuzzer configuration
     pub config: Config,
 
@@ -799,6 +803,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
             dirtied_registers: false,
             sent_packets: Vec::new(),
             filesystem: None,
+            network: None,
             config,
             #[cfg(feature = "redqueen")]
             redqueen_rules: BTreeMap::new(),
@@ -929,6 +934,11 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         let mut fs = FileSystem::default();
         fuzzer.init_files(&mut fs)?;
         fuzzvm.filesystem = Some(fs);
+
+        // Initialize the network with packets from the fuzzer
+        let mut network = Network::default();
+        fuzzer.init_packets(&mut network)?;
+        fuzzvm.network = Some(network);
 
         // Add a breakpoint to LSTAR which is caught during `syscall` execution to
         // determine if the fuzzer wants to handle the syscall or not
@@ -3469,6 +3479,11 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         if let Some(fs) = self.filesystem.as_mut() {
             fs.reset();
             fuzzer.init_files(fs)?;
+        }
+
+        // Initialize the filesystem with the files from the fuzzer
+        if let Some(net) = self.network.as_mut() {
+            net.reset();
         }
 
         // Return the guest reset perf

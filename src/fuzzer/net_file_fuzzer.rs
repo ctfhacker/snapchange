@@ -8,10 +8,11 @@ use anyhow::Result;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 
+use std::cell::Cell;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::addrs::{Cr3, VirtAddr};
@@ -40,7 +41,7 @@ pub enum RedqueenCandidate {
 }
 
 /// A input type that fuzzes files and network packets
-#[derive(Default, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InputFromAnywhere {
     /// The names of fuzzed files in this input
     pub file_names: Vec<String>,
@@ -48,8 +49,11 @@ pub struct InputFromAnywhere {
     /// The data for the fuzzed files in this input
     pub file_datas: Vec<Vec<u8>>,
 
+    /// The number of packets to generate for this input
+    pub number_of_packets: usize,
+
     /// The names of fuzzed sockets in this input
-    pub sockets: Vec<String>,
+    pub packets: Vec<Vec<u8>>,
 
     /// The initial file from ./snapshot/input. At the beginning of the fuzz run, we don't know
     /// what this input could mean (a file, a packet, ect). So we store it here and use it as
@@ -70,7 +74,8 @@ impl FuzzInput for InputFromAnywhere {
             Err(_) => Ok(Self {
                 file_names: Vec::new(),
                 file_datas: Vec::new(),
-                sockets: Vec::new(),
+                number_of_packets: 0,
+                packets: Vec::new(),
                 starting_input: bytes.to_vec(),
             }),
         };
@@ -96,7 +101,7 @@ impl FuzzInput for InputFromAnywhere {
     ) -> InputWithMetadata<Self> {
         let mut file_names: Vec<String> = Vec::new();
         let mut file_datas = Vec::new();
-        let mut sockets = Vec::new();
+        let mut packets = Vec::new();
 
         // Choose a random starting input if there is one from the corpus
         let starting_input = if corpus.is_empty() {
@@ -131,8 +136,9 @@ impl FuzzInput for InputFromAnywhere {
         InputWithMetadata::from_input(Self {
             file_names,
             file_datas,
-            sockets,
+            packets,
             starting_input,
+            number_of_packets: 0,
         })
     }
 
@@ -179,6 +185,42 @@ impl FuzzInput for InputFromAnywhere {
                 #[cfg(feature = "redqueen")]
                 redqueen_rules,
             );
+        }
+
+        if !input.packets.is_empty() {
+            for _ in 0..rng.gen_range(1..=max_mutations.max(2)) {
+                let packet_num = rng.gen_range(0..input.packets.len().max(1));
+
+                // Random chance to delete the packet
+                if rng.gen_bool(1.0 / 10000.0) {
+                    input.packets.remove(packet_num);
+                    continue;
+                }
+
+                // Get the random packet
+                let Some(mut random_packet) = input.packets.get_mut(packet_num) else {
+                    continue;
+                };
+
+                // Random chance to empty a packet and have `recv` return `0`
+                if rng.gen_bool(1.0 / 256.0) {
+                    random_packet.clear();
+                    continue;
+                }
+
+                // Otherwise, mutate the packet as normal
+                <Vec<u8> as FuzzInput>::mutate(
+                    random_packet,
+                    &[],
+                    rng,
+                    dictionary,
+                    min_length,
+                    max_length,
+                    max_mutations,
+                    #[cfg(feature = "redqueen")]
+                    redqueen_rules,
+                );
+            }
         }
 
         mutations
@@ -255,12 +297,18 @@ impl FuzzInput for InputFromAnywhere {
 #[derive(Default)]
 pub struct NetFileFuzzer<T: InputlessFuzzer> {
     target_fuzzer: T,
+
+    /// Triggers the creation of packets for this input. Enabled the first time we see a `recv` call.
+    wants_packets: bool,
+
+    /// The index to the next packet to send to the target from the input
+    packet_index: usize,
 }
 
 /// A fuzzer whose inputs come from files/network and are not specifically set by the fuzzer itself
 pub trait InputlessFuzzer: Default {
     /// The maximum length for an input used to truncate long inputs.
-    const MAX_INPUT_LENGTH: usize;
+    const MAX_INPUT_LENGTH: usize = 0x1000;
 
     /// The minimum length for an input
     const MIN_INPUT_LENGTH: usize = 1;
@@ -271,6 +319,9 @@ pub trait InputlessFuzzer: Default {
 
     /// Maximum number of mutation functions called during mutation
     const MAX_MUTATIONS: u64 = 16;
+
+    /// Maximum number of packets to generate for this fuzzer
+    const MAX_PACKETS: usize = 8;
 
     /// Reset the state of the current fuzzer
     fn reset_fuzzer_state(&mut self) {
@@ -401,7 +452,211 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
     }
 
     fn breakpoints(&self) -> Option<&[Breakpoint<Self>]> {
+        // let fuzzer_bps = self.target_fuzzer.breakpoints().unwrap_or(&[]);
+
         Some(&[
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___sigaction", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    // Set success
+                    fuzzvm.set_rax(0);
+                    fuzzvm.fake_immediate_return();
+                    Ok(Execution::Continue)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___socket", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let domain = (fuzzvm.rdi() as i32).into();
+                    let socket_type = (fuzzvm.rsi() as i32).into();
+                    let protocol = (fuzzvm.rdx() as i32).into();
+
+                    // Create the new emulated socket
+                    let fd =
+                        fuzzvm
+                            .network
+                            .as_mut()
+                            .unwrap()
+                            .new_socket(domain, socket_type, protocol);
+
+                    // Set the return result to the emulated file descriptor
+                    fuzzvm.set_rax(fd);
+                    fuzzvm.fake_immediate_return();
+
+                    Ok(Execution::Continue)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___setsockopt", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let fd = fuzzvm.rdi();
+                    let level = fuzzvm.rsi() as i32;
+                    let optname = fuzzvm.rdx() as i32;
+                    let opts = fuzzvm.rcx();
+                    let opt_len = fuzzvm.r8() as usize;
+
+                    let mut opt_data = vec![0_u8; opt_len];
+                    fuzzvm.read_bytes(VirtAddr(opts), fuzzvm.cr3(), &mut opt_data)?;
+
+                    fuzzvm
+                        .network
+                        .as_mut()
+                        .unwrap()
+                        .setsockopt(fd, level, optname, opt_data);
+
+                    // Return success
+                    fuzzvm.set_rax(0);
+                    fuzzvm.fake_immediate_return()?;
+
+                    Ok(Execution::Continue)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___bind", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let socket = fuzzvm.rdi();
+                    let address_ptr = fuzzvm.rsi();
+                    let address_len = fuzzvm.rdx() as usize;
+
+                    // Read the address data
+                    let mut address_data = vec![0_u8; address_len];
+                    fuzzvm.read_bytes(VirtAddr(address_ptr), fuzzvm.cr3(), &mut address_data)?;
+
+                    // Emulate the bind
+                    fuzzvm.network.as_mut().unwrap().bind(socket, address_data);
+
+                    // Return success
+                    fuzzvm.set_rax(0);
+                    fuzzvm.fake_immediate_return()?;
+
+                    Ok(Execution::Continue)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___listen", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let socket = fuzzvm.rdi();
+                    let backlog = fuzzvm.rsi() as i32;
+
+                    // Emulate the bind
+                    fuzzvm.network.as_mut().unwrap().listen(socket, backlog);
+
+                    // Return success
+                    fuzzvm.set_rax(0);
+                    fuzzvm.fake_immediate_return()?;
+
+                    Ok(Execution::Continue)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI_accept", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let socket = fuzzvm.rdi();
+                    let address_ptr = fuzzvm.rsi();
+                    let address_len = fuzzvm.rdx() as usize;
+
+                    // Only open one socket at a time?
+                    if fuzzvm.network.as_ref().unwrap().sockets.len() >= 2 {
+                        fuzzvm.set_rax(u64::MAX);
+                        fuzzvm.fake_immediate_return()?;
+                        return Ok(Execution::Continue);
+                    }
+
+                    assert!(
+                        address_ptr == 0,
+                        "TODO(corydu): Address ptr is null. Fuzz results of accept."
+                    );
+
+                    // Emulate the accept
+                    let fd = fuzzvm.network.as_mut().unwrap().accept(socket)?;
+
+                    // Return success
+                    fuzzvm.set_rax(fd);
+                    fuzzvm.fake_immediate_return()?;
+                    Ok(Execution::Continue)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI_verr", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let err_msg = fuzzvm.read_c_string(VirtAddr(fuzzvm.rsi()), fuzzvm.cr3())?;
+                    let err_rip = fuzzvm.rcx();
+                    let err_sym = match fuzzvm.get_symbol(err_rip) {
+                        Some(msg) => msg,
+                        None => "unknown_symbol".to_string(),
+                    };
+
+                    log::error!("Error @ {err_rip:#x} ({err_sym})-- {err_msg}");
+
+                    Ok(Execution::Reset)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___bind", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let socket_name = format!("socket_fd_");
+                    fuzzvm.print_context()?;
+
+                    Ok(Execution::Reset)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___recv", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, fuzzer, _feedback| {
+                    // The input doesn't have any more packets to send to the client, reset
+                    if input.packets.is_empty() || fuzzer.packet_index >= input.packets.len() {
+                        fuzzer.wants_packets = true;
+                        return Ok(Execution::Reset);
+                    }
+
+                    // Parse the arguments to the function
+                    let socket = fuzzvm.rdi();
+                    let buffer_ptr = fuzzvm.rsi();
+                    let buffer_len = fuzzvm.rdx() as usize;
+                    let flags = fuzzvm.rcx();
+
+                    // Get the index of the next packet from the input
+                    let packet_index = fuzzer.packet_index;
+                    fuzzer.packet_index += 1;
+
+                    let data = input.packets[packet_index].as_slice();
+
+                    // Use the smaller of the `recv` packet length.
+                    // NOTE(corydu): Currently, every `recv` call is a different "packet" for
+                    // mutation/generation purposes.
+                    let packet_len = data.len().min(buffer_len);
+
+                    // Write the bytes into the given buffer
+                    fuzzvm.write_bytes(VirtAddr(buffer_ptr), fuzzvm.cr3(), &data[..packet_len])?;
+
+                    // Set the return value to the number of bytes written to the buffer
+                    fuzzvm.set_rax(packet_len as u64);
+                    fuzzvm.fake_immediate_return();
+
+                    Ok(Execution::Continue)
+                },
+            },
+            Breakpoint {
+                lookup: AddressLookup::SymbolOffset("libc.so.6!__GI___fork", 0x0),
+                bp_type: BreakpointType::Repeated,
+                bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, _fuzzer, _feedback| {
+                    let cr3 = fuzzvm.cr3().0;
+                    log::info!("Fork -- cr3 {cr3:#x}");
+
+                    Ok(Execution::Continue)
+                },
+            },
+            /*
+            // FILE OPERATIONS
             Breakpoint {
                 lookup: AddressLookup::SymbolOffset("do_sys_openat2", 0x0),
                 bp_type: BreakpointType::Repeated,
@@ -410,6 +665,9 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
                     let dirfd = fuzzvm.rdi();
                     let filename = fuzzvm.read_c_string(VirtAddr(fuzzvm.rsi()), fuzzvm.cr3())?;
                     let open_how = fuzzvm.rdx();
+
+                    log::info!("Opening: {filename}");
+                    return Ok(Execution::Continue);
 
                     // If this is the first time seeing this open file, add this filename to the
                     // list of input files to generate. This will be picked up when these
@@ -442,6 +700,8 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
                     return Ok(Execution::Reset);
                 },
             },
+            */
+            /*
             Breakpoint {
                 lookup: AddressLookup::SymbolOffset("ksys_read", 0x0),
                 bp_type: BreakpointType::Repeated,
@@ -543,7 +803,65 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
                     Ok(Execution::Continue)
                 },
             },
+            */
         ])
+    }
+
+    fn mutate_input(
+        &mut self,
+        input: &mut Self::Input,
+        corpus: &[Arc<InputWithMetadata<Self::Input>>],
+        rng: &mut Rng,
+        dictionary: &Option<Vec<Vec<u8>>>,
+        #[cfg(feature = "redqueen")] redqueen_rules: Option<&FxHashSet<RedqueenRule>>,
+    ) -> Vec<String> {
+        if self.wants_packets {
+            // Include up the maximum number of packets
+            let wanted_packets = rng.gen_range(1..=F::MAX_PACKETS);
+
+            let missing_packets = wanted_packets.saturating_sub(input.packets.len());
+
+            for _ in 0..missing_packets {
+                // 1/2 chance to ignore this missing packet
+                if rng.gen_bool(0.5) {
+                    continue;
+                }
+
+                // Choose a random input from the corpus
+                let Some(rand_input) = corpus.choose(rng) else {
+                    input.packets.push(Vec::new());
+                    break;
+                };
+
+                // Choose a random packet from this random input
+                let Some(rand_packet) = rand_input.packets.choose(rng) else {
+                    input.packets.push(Vec::new());
+                    continue;
+                };
+
+                // Use this random packet for this missing input
+                input.packets.push(rand_packet.clone());
+            }
+
+            // If packets are expected, always include at least one
+            if wanted_packets > 0 && input.packets.is_empty() {
+                // Use this random packet for this missing input
+                input.packets.push(Vec::new());
+            }
+        }
+
+        // Mutate the input in place
+        Self::Input::mutate(
+            input,
+            corpus,
+            rng,
+            dictionary,
+            Self::MIN_INPUT_LENGTH,
+            Self::MAX_INPUT_LENGTH,
+            Self::MAX_MUTATIONS,
+            #[cfg(feature = "redqueen")]
+            redqueen_rules,
+        )
     }
 
     fn handle_crash(
