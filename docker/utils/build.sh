@@ -39,6 +39,9 @@ fi
 if [[ -z "$SNAPSHOT_FUNCTION" ]]; then
   SNAPSHOT_FUNCTION=""
 fi
+if [[ -z "$SNAPSHOT_ADDRESS" ]]; then
+  SNAPSHOT_ADDRESS=""
+fi
 if [[ -z "$SNAPSHOT_EXTRACT" ]]; then
   SNAPSHOT_EXTRACT=""
 fi
@@ -115,7 +118,6 @@ if ! [[ -z "$SNAPSHOT_EXTRACT" ]]; then
 fi
 
 if [[ "$SNAPSHOT_FUNCTION" ]]; then 
-
     if ! nm "$BIN" | grep $SNAPSHOT_FUNCTION; then
         log_error "$SNAPSHOT_FUNCTION not found in $BIN."
         exit 1
@@ -131,10 +133,32 @@ if [[ "$SNAPSHOT_FUNCTION" ]]; then
         exit 1
     fi
     
+    # If there is a snapshot function, dump the first 32 bytes of the snapshot location to restore
+    # after taking the snapshot. These bytes are corrupted by the gdbscript to take the snapshot.
+    "$R2Z" -q -c "p8 32 @ sym.$SNAPSHOT_FUNCTION" $BIN > /tmp/libfuzzer.bytes.bak
+    cat /tmp/libfuzzer.bytes.bak
+fi
+
+if [[ "$SNAPSHOT_ADDRESS" ]]; then 
+    R2Z=""
+    if command -v rizin >/dev/null 2>&1; then
+        R2Z=rizin
+    elif command -v r2 >/dev/null 2>&1; then
+        R2Z=r2
+    else
+        log_error "please install radare2/rizin for patching"
+        exit 1
+    fi
+    
     # If there is a snapshot function, dump the first 16 bytes of LLVMFuzzerTestOneInput to restore
     # after taking the snapshot. These bytes are corrupted 
-    "$R2Z" -q -c "p8 16 @ sym.$SNAPSHOT_FUNCTION" $BIN > /tmp/libfuzzer.bytes.bak
+    "$R2Z" -q -c "p8 32 @ $SNAPSHOT_ADDRESS" $BIN > /tmp/libfuzzer.bytes.bak
     cat /tmp/libfuzzer.bytes.bak
+
+    # Use this address as the snapshot function
+    SNAPSHOT_FUNCTION="$SNAPSHOT_ADDRESS"
+
+    log_success "Address snapshot function: $SNAPSHOT_FUNCTION"
 fi
 
  
@@ -425,18 +449,37 @@ set {unsigned char}($SNAPSHOT_FUNCTION+0x0)=0xcc
 set {unsigned char}($SNAPSHOT_FUNCTION+0x1)=0x0f
 set {unsigned char}($SNAPSHOT_FUNCTION+0x2)=0x01
 set {unsigned char}($SNAPSHOT_FUNCTION+0x3)=0xc1
-set {unsigned char}($SNAPSHOT_FUNCTION+0x4)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0x5)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0x6)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0x7)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0x8)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0x9)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0xa)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0xb)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0xc)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0xd)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0xe)=0xcd
-set {unsigned char}($SNAPSHOT_FUNCTION+0xf)=0xcd
+
+# set {unsigned char}($SNAPSHOT_FUNCTION+0x4)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0x5)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0x6)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0x7)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0x8)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0x9)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0xa)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0xb)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0xc)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0xd)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0xe)=0xcd
+# set {unsigned char}($SNAPSHOT_FUNCTION+0xf)=0xcd
+
+# Call syscall - exit(123)
+# ❯ rasm2 'xor rax, rax ; add eax, 60 ; xor rdi, rdi ; add edi, 123 ; syscall'
+# 4831c083c03c4831ff83c77b0f05
+set {unsigned char}($SNAPSHOT_FUNCTION+0x4)=0x48
+set {unsigned char}($SNAPSHOT_FUNCTION+0x5)=0x31
+set {unsigned char}($SNAPSHOT_FUNCTION+0x6)=0xc0
+set {unsigned char}($SNAPSHOT_FUNCTION+0x7)=0x83
+set {unsigned char}($SNAPSHOT_FUNCTION+0x8)=0xc0
+set {unsigned char}($SNAPSHOT_FUNCTION+0x9)=0x3c
+set {unsigned char}($SNAPSHOT_FUNCTION+0xa)=0x48
+set {unsigned char}($SNAPSHOT_FUNCTION+0xb)=0x31
+set {unsigned char}($SNAPSHOT_FUNCTION+0xc)=0xff
+set {unsigned char}($SNAPSHOT_FUNCTION+0xd)=0x83
+set {unsigned char}($SNAPSHOT_FUNCTION+0xe)=0xc7
+set {unsigned char}($SNAPSHOT_FUNCTION+0xf)=0x7b
+set {unsigned char}($SNAPSHOT_FUNCTION+0x10)=0x0f
+set {unsigned char}($SNAPSHOT_FUNCTION+0x11)=0x05
 
 x/16xb \$rip
 x/16xb $SNAPSHOT_FUNCTION
@@ -448,15 +491,7 @@ x/16xb $SNAPSHOT_FUNCTION
 
 printf "Sourcing gdb script\n"
 source $GDBPY
-printf "Single step 1"
-x/16xb \$rip
-ni
-printf "Single step 2"
-x/16xb \$rip
-ni
-printf "Single step 3"
-x/16xb \$rip
-quit
+detach
 
 EOF
 else

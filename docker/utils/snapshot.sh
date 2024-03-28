@@ -263,7 +263,10 @@ cp vm.log "$OUTPUT/"
 
 log_success "extracted snapshot - postprocessing now."
 
-if [[ $SNAPSHOT_FUNCTION ]]; then 
+echo "Function: $SNAPSHOT_FUNCTION"
+log_success "Function: $SNAPSHOT_FUNCTION"
+
+if [[ $SNAPSHOT_FUNCTION ]] || [[ $SNAPSHOT_ADDRESS ]]; then 
     log_msg "patching physmem"
     BYTES="$(cat /tmp/libfuzzer.bytes.bak)"
     R2Z=""
@@ -276,7 +279,8 @@ if [[ $SNAPSHOT_FUNCTION ]]; then
         exit 1
     fi
     # Restore the original bytes at the LLVMFuzzerTestOneInput bytes
-    "$R2Z" -w -q -c "/x cc0f01c1cdcdcdcdcdcdcdcdcdcdcdcd ; wx $BYTES @ hit0_0" "$OUTPUT/fuzzvm.physmem"
+    # "$R2Z" -w -q -c "/x cc0f01c1cdcdcdcdcdcdcdcdcdcdcdcd ; wx $BYTES @ hit0_0" "$OUTPUT/fuzzvm.physmem"
+    "$R2Z" -w -q -c "/x cc0f01c14831c083c03c4831ff83c77b0f05 ; wx $BYTES @ hit0_0" "$OUTPUT/fuzzvm.physmem"
 fi
 
 # Create the reset script for the snapshot

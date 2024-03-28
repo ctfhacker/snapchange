@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+log_error "REWRITE THESE SCRIPTS IN RUST.."
+log_error "REWRITE THESE SCRIPTS IN RUST.."
+log_error "REWRITE THESE SCRIPTS IN RUST.."
+
 if [[ -z "$SNAPCHANGE_ROOT" ]]; then
   export SNAPCHANGE_ROOT="$(realpath "$(dirname "$0")/../")"
 fi
