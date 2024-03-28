@@ -1,0 +1,20 @@
+# Use ubuntu to run the target binary
+FROM ubuntu:latest as target
+
+RUN apt-get update -q && \
+    apt-get install -q -y gdb python3 binutils python-is-python3 libc6-dbg libssl-dev libssl3 clang make && \
+    apt-get clean -y
+
+# Copy the target binary
+COPY ti-1337-fixed.bin /opt/ti-1337-fixed.bin
+
+# Setup gambino user for this challenge
+RUN mkdir /home/gambino && \
+    useradd -u 1234 -d /home/gambino gambino
+
+# Create the docker image for taking snapshots
+FROM ctfhacker/snapchange_snapshot
+COPY --from=target / "$SNAPSHOT_INPUT"
+
+ENV SNAPSHOT_ENTRYPOINT=/opt/ti-1337-fixed.bin
+ENV SNAPSHOT_ADDRESS=0x400d7d
