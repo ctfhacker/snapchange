@@ -272,6 +272,12 @@ pub enum Execution {
         /// The path of the file opened
         path: String,
     },
+
+    /// Reset when the VM comes across a new packet
+    NeedAnotherPacketReset {
+        /// The new number of packets to generate
+        number_of_packets: u64,
+    },
 }
 
 impl Execution {
@@ -288,6 +294,7 @@ impl Execution {
                 | Self::CrashReset { .. }
                 | Self::TimeoutReset
                 | Self::OpenedNewFileReset { .. }
+                | Self::NeedAnotherPacketReset { .. }
         )
     }
 }
