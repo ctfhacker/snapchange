@@ -4171,7 +4171,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -4235,7 +4235,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -4359,7 +4359,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -4455,7 +4455,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 

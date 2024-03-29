@@ -977,7 +977,7 @@ fn start_core<FUZZER: Fuzzer>(
         let redqueen_rules = fuzzvm.redqueen_rules.get(&input.fuzz_hash());
 
         // Mutate the input based on the fuzzer
-        let mutations = time!(
+        let mut mutations = time!(
             InputMutate,
             fuzzer.mutate_input(
                 &mut input,
@@ -1138,17 +1138,21 @@ fn start_core<FUZZER: Fuzzer>(
                 feedback.record(file_feedback);
 
                 // Add a mutation log saying this input was added because it opened a new file
-                input.add_mutation(format!("Opened new file: {path}"));
+                mutations.push(format!("Opened new file: {path}"));
+            }
+
+            // Allow the fuzzer to handle new opened files
+            #[cfg(feature = "netfile")]
+            if let Execution::NeedAnotherPacketReset { number_of_packets } = &execution {
+                let file_feedback = 0xcccc_0000_0000_0000 | *number_of_packets;
+                feedback.record(file_feedback);
+
+                // Add a mutation log saying this input was added because it opened a new file
+                mutations.push(format!("New packet: {number_of_packets}"));
             }
 
             // Reset the VM if requested
-            if matches!(
-                execution,
-                Execution::Reset
-                    | Execution::CrashReset { .. }
-                    | Execution::TimeoutReset
-                    | Execution::OpenedNewFileReset { .. }
-            ) {
+            if execution.is_reset() {
                 break;
             }
         }
@@ -1235,6 +1239,7 @@ fn start_core<FUZZER: Fuzzer>(
         } else if feedback.has_new() {
             // If this input generated new coverage, add the input to the corpus
             let new_coverage = feedback.take_log();
+
             input.add_new_coverage(new_coverage);
             assert!(!input.metadata.read().unwrap().new_coverage.is_empty());
 

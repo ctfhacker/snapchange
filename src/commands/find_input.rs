@@ -116,7 +116,7 @@ fn start_core<FUZZER: Fuzzer>(
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -207,7 +207,6 @@ pub(crate) fn run<FUZZER: Fuzzer>(
         None => VirtAddr(project_state.vbcpu.rip),
     };
 
-    // Get the files to execute over
     let mut files = Vec::new();
     for path in ["current_corpus", "input", "crashes"] {
         let curr_dir = project_state.path.join(path);

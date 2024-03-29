@@ -547,7 +547,7 @@ fn start_core<FUZZER: Fuzzer>(
             }
 
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 log::debug!("stopping tracing at @ {rip:#x}");
                 break;
             }
