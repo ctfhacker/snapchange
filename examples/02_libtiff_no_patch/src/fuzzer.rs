@@ -36,7 +36,7 @@ pub struct TiffInfoFuzzer {}
 
 impl InputlessFuzzer for TiffInfoFuzzer {
     const START_ADDRESS: u64 = constants::RIP;
-    const MAX_INPUT_LENGTH: usize = 0x10000;
+    const MAX_INPUT_LENGTH: usize = 0x1000;
 
     fn reset_breakpoints(&self) -> Option<&[AddressLookup]> {
         Some(&[AddressLookup::SymbolOffset("tiffinfo!TIFFErrorExt", 0x0)])
