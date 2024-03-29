@@ -69,7 +69,8 @@ impl FuzzInput for InputFromAnywhere {
         // FUZZER::Input::from_bytes is called on every file in ./snapshot/input at
         // the beginning of a fuzz run. We want to enable dumping blobs of data in
         // ./snapshot/input without much labeling. If we can't
-        let res = match rmp_serde::from_slice(bytes) {
+        // let res = match rmp_serde::from_slice(bytes) {
+        let res = match serde_json::from_slice(bytes) {
             Ok(res) => Ok(res),
             Err(_) => Ok(Self {
                 file_names: Vec::new(),
@@ -86,7 +87,8 @@ impl FuzzInput for InputFromAnywhere {
     fn to_bytes(&self, output: &mut Vec<u8>) -> Result<()> {
         output.clear();
 
-        let bytes = rmp_serde::to_vec(self)?;
+        // let bytes = rmp_serde::to_vec(self)?;
+        let bytes = serde_json::to_vec(self)?;
         output.extend(bytes);
 
         Ok(())
@@ -187,9 +189,10 @@ impl FuzzInput for InputFromAnywhere {
             );
         }
 
+        // Mutate packets in a variety of ways
         if !input.packets.is_empty() {
-            for _ in 0..rng.gen_range(1..=max_mutations.max(2)) {
-                let packet_num = rng.gen_range(0..input.packets.len().max(1));
+            for _ in 0..rng.gen_range(1..=max_mutations) {
+                let packet_num = rng.gen_range(0..input.packets.len());
 
                 // Random chance to delete the packet
                 if rng.gen_bool(1.0 / 10000.0) {
@@ -202,14 +205,25 @@ impl FuzzInput for InputFromAnywhere {
                     continue;
                 };
 
+                // Random chance to copy a packet from another input
+                if rng.gen_bool(1.0 / 1024.0) {
+                    if let Some(other_input) = corpus.choose(rng) {
+                        if other_input.packets.len() >= packet_num {
+                            // Copy a packet from another input at this packet index
+                            input.packets[packet_num] = other_input.packets[packet_num].clone();
+                            continue;
+                        }
+                    }
+                }
+
                 // Random chance to empty a packet and have `recv` return `0`
-                if rng.gen_bool(1.0 / 256.0) {
+                if rng.gen_bool(1.0 / 128.0) {
                     random_packet.clear();
                     continue;
                 }
 
                 // Otherwise, mutate the packet as normal
-                <Vec<u8> as FuzzInput>::mutate(
+                mutations.extend(<Vec<u8> as FuzzInput>::mutate(
                     random_packet,
                     &[],
                     rng,
@@ -219,7 +233,7 @@ impl FuzzInput for InputFromAnywhere {
                     max_mutations,
                     #[cfg(feature = "redqueen")]
                     redqueen_rules,
-                );
+                ));
             }
         }
 
@@ -298,8 +312,8 @@ impl FuzzInput for InputFromAnywhere {
 pub struct NetFileFuzzer<T: InputlessFuzzer> {
     target_fuzzer: T,
 
-    /// Triggers the creation of packets for this input. Enabled the first time we see a `recv` call.
-    wants_packets: bool,
+    /// The maximum number of packets this fuzzer will generate per input
+    number_of_packets: usize,
 
     /// The index to the next packet to send to the target from the input
     packet_index: usize,
@@ -427,6 +441,11 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
         log::info!("INIT known files");
 
         Ok(())
+    }
+
+    fn reset_fuzzer_state(&mut self) {
+        self.target_fuzzer.reset_fuzzer_state();
+        self.packet_index = 0;
     }
 
     fn crash_breakpoints(&self) -> Option<&[AddressLookup]> {
@@ -614,8 +633,17 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
                 bp_hook: |fuzzvm: &mut FuzzVm<Self>, input, fuzzer, _feedback| {
                     // The input doesn't have any more packets to send to the client, reset
                     if input.packets.is_empty() || fuzzer.packet_index >= input.packets.len() {
-                        fuzzer.wants_packets = true;
-                        return Ok(Execution::Reset);
+                        // Already hit the maximum number of packets, just reset
+                        if fuzzer.number_of_packets >= F::MAX_PACKETS {
+                            return Ok(Execution::Reset);
+                        }
+
+                        // The fuzzer can still create more packets, bump up the number of packets
+                        fuzzer.number_of_packets += 1;
+
+                        return Ok(Execution::NeedAnotherPacketReset {
+                            number_of_packets: fuzzer.packet_index as u64,
+                        });
                     }
 
                     // Parse the arguments to the function
@@ -815,18 +843,21 @@ impl<F: InputlessFuzzer> Fuzzer for NetFileFuzzer<F> {
         dictionary: &Option<Vec<Vec<u8>>>,
         #[cfg(feature = "redqueen")] redqueen_rules: Option<&FxHashSet<RedqueenRule>>,
     ) -> Vec<String> {
-        if self.wants_packets {
+        // Increase the upper bound of the maximum number of packets to generate.
+        if self.number_of_packets < input.packets.len() {
+            self.number_of_packets = self.number_of_packets.max(input.packets.len());
+            assert!(self.number_of_packets <= F::MAX_PACKETS);
+        }
+
+        if self.number_of_packets > 0 {
             // Include up the maximum number of packets
-            let wanted_packets = rng.gen_range(1..=F::MAX_PACKETS);
+            let wanted_packets = rng.gen_range(1..(self.number_of_packets + 1));
 
             let missing_packets = wanted_packets.saturating_sub(input.packets.len());
 
-            for _ in 0..missing_packets {
-                // 1/2 chance to ignore this missing packet
-                if rng.gen_bool(0.5) {
-                    continue;
-                }
+            let before_len = input.packets.len();
 
+            for _ in 0..missing_packets {
                 // Choose a random input from the corpus
                 let Some(rand_input) = corpus.choose(rng) else {
                     input.packets.push(Vec::new());
