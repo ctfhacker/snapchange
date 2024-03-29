@@ -36,9 +36,9 @@ pub struct TiffInfoFuzzer {}
 
 impl InputlessFuzzer for TiffInfoFuzzer {
     const START_ADDRESS: u64 = constants::RIP;
-    const MAX_INPUT_LENGTH: usize = 0x2;
-    const MAX_MUTATIONS: u64 = 0x2;
-    const MAX_PACKETS: usize = 100;
+    const MAX_INPUT_LENGTH: usize = 0x1;
+    const MAX_MUTATIONS: u64 = 0x8;
+    const MAX_PACKETS: usize = 2048;
 
     /*
     fn crash_breakpoints(&self) -> Option<&[AddressLookup]> {
