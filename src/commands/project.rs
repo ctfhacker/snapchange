@@ -8,7 +8,7 @@ use crate::memory::WriteMem;
 use crate::{cmdline, symbols, utils, Symbol};
 use crate::{Cr3, ProjectState, VirtAddr, COLUMNS};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::Ordering;
 
 /// File containing all physical memory modifications
@@ -322,6 +322,176 @@ pub(crate) fn run(project_state: &ProjectState, args: &cmdline::Project) -> Resu
         }
         cmdline::ProjectSubCommand::Symbols | cmdline::ProjectSubCommand::InitConfig => {
             unreachable!()
+        }
+
+        cmdline::ProjectSubCommand::Cr3 => {
+            use simd_json::prelude::*;
+
+            let file = "/home/user/workspace/dwarf2json/Linux670.json";
+
+            let mut data = std::fs::read_to_string(file).unwrap();
+            let json: simd_json::BorrowedValue = unsafe { simd_json::from_str(&mut data).unwrap() };
+
+            #[derive(Debug)]
+            struct StructField {
+                offset: i64,
+                type_name: Option<String>,
+            }
+
+            // Parse a struct type from the `user_types` from the dwarf2json output
+            fn get_struct(
+                name: &str,
+                json: &simd_json::BorrowedValue,
+            ) -> HashMap<String, StructField> {
+                let mut results = HashMap::new();
+
+                let obj = json.get_object("user_types").unwrap();
+
+                let task_struct = obj.get(name).unwrap().try_as_object().unwrap();
+                // dbg!(task_struct);
+
+                let fields = task_struct.get("fields");
+                let fields = fields.try_as_object().unwrap();
+
+                for (index, val) in fields.values().enumerate() {
+                    // dbg!(val);
+                    if let Ok(offset) = val.get("offset").unwrap().try_as_i64() {
+                        let type_ = val.get("type").unwrap().try_as_object().unwrap();
+
+                        let kind = type_.get("kind").unwrap().try_as_str().unwrap();
+                        let type_name = type_
+                            .get("name")
+                            .and_then(|x| Some(x.try_as_str().unwrap().to_string()));
+
+                        // dbg!(kind);
+
+                        let field = StructField { offset, type_name };
+
+                        let name = fields.keys().nth(index).unwrap().to_string();
+                        // offset_to_name.push(offset, (name, kind));
+
+                        results.insert(name, field);
+                    }
+                }
+
+                results
+            }
+
+            // Get the `task_struct` struct
+            let task_struct = get_struct("task_struct", &json);
+
+            // Get the struct offset of `task_struct.tasks`
+            dbg!(task_struct.get("tasks").unwrap());
+            let tasks_offset = task_struct.get("tasks").unwrap().offset;
+
+            // Get the struct offset of `task_struct.mm`
+            let mm_offset = task_struct.get("mm").unwrap().offset;
+            let mm_struct = get_struct("mm_struct", &json);
+            dbg!(&mm_struct);
+
+            // Get the struct offset of `task_struct.mm`
+            let unnamed_field_0 = mm_struct.get("unnamed_field_0");
+            dbg!(unnamed_field_0);
+            let unnamed_struct = unnamed_field_0.unwrap().type_name.as_ref().unwrap();
+
+            let mm_struct = get_struct(&unnamed_struct, &json);
+            let pgd_offset = mm_struct.get("pgd").unwrap().offset;
+            dbg!(pgd_offset);
+
+            let comm_offset = task_struct.get("comm").unwrap().offset;
+            dbg!(comm_offset);
+
+            let mut init_task = 0;
+            for Symbol { address, symbol } in symbols.as_ref().unwrap() {
+                if symbol != "init_task" {
+                    continue;
+                }
+
+                init_task = *address;
+                break;
+            }
+
+            dbg!(init_task);
+
+            let cr3 = project_state.vbcpu.cr3;
+
+            println!("INIT TASK");
+            let mut task_base = init_task;
+
+            let mut cr3s = Vec::new();
+
+            for i in 0.. {
+                println!("Task {i} base");
+                memory.hexdump(VirtAddr(task_base), Cr3(cr3), 0x40)?;
+
+                println!("Task {i}: .mm (+{mm_offset})");
+                memory.hexdump(
+                    VirtAddr(task_base.wrapping_add_signed(mm_offset)),
+                    Cr3(cr3),
+                    0x10,
+                )?;
+
+                println!("Task {i}: .comm (+{comm_offset})");
+                let name = memory.read::<[u8; 16]>(
+                    VirtAddr(task_base.wrapping_add_signed(comm_offset)),
+                    Cr3(cr3),
+                )?;
+
+                let name = name
+                    .iter()
+                    .take_while(|x| **x != 0)
+                    .map(|x| *x as char)
+                    .collect::<String>();
+
+                memory.hexdump(
+                    VirtAddr(task_base.wrapping_add_signed(comm_offset)),
+                    Cr3(cr3),
+                    0x20,
+                )?;
+
+                let mm_addr = memory
+                    .read::<u64>(VirtAddr(task_base.wrapping_add_signed(mm_offset)), Cr3(cr3))?;
+                if mm_addr > 0 {
+                    let page_table_ptr = mm_addr.wrapping_add_signed(pgd_offset);
+                    memory.hexdump(VirtAddr(mm_addr), Cr3(cr3), 0x90)?;
+
+                    let page_table = memory
+                        .read::<u64>(VirtAddr(page_table_ptr), Cr3(cr3))
+                        .unwrap();
+
+                    if let Some(cr3) = memory.translate(VirtAddr(page_table), Cr3(cr3)).phys_addr {
+                        println!("CR3: {page_table:x?}");
+                        cr3s.push((name.to_string(), cr3))
+                    }
+                }
+
+                println!("Task {i}: .tasks (+{tasks_offset})");
+                memory.hexdump(
+                    VirtAddr(task_base.wrapping_add_signed(tasks_offset)),
+                    Cr3(cr3),
+                    0x20,
+                )?;
+
+                println!("Goto next task..");
+                task_base = memory
+                    .read::<u64>(
+                        VirtAddr(task_base.wrapping_add_signed(tasks_offset)),
+                        Cr3(cr3),
+                    )
+                    .unwrap();
+
+                // Go back to the base of the struct
+                task_base -= tasks_offset as u64;
+
+                if task_base == init_task {
+                    println!("FOUND END");
+                    break;
+                }
+            }
+
+            for cr3 in cr3s {
+                println!("{cr3:x?}");
+            }
         }
     }
 

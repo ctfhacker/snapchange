@@ -588,6 +588,9 @@ pub enum ProjectSubCommand {
 
     /// Write DebugInfo as json
     WriteDebugInfoJson,
+
+    /// Gather all cr3s of all processes in the snapshot
+    Cr3,
 }
 
 /// Translate an address from the project
