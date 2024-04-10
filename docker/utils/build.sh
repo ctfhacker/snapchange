@@ -524,9 +524,14 @@ mount -t tmpfs tmpfs /dev/shm
 echo "[+] bringing up loopback netdevice"
 
 if command -v ip >/dev/null 2>&1; then
-  ip link set up dev lo
+  echo "[.] Using ip"
+  ip link set up dev lo || echo "[!] Failed to use ip to bring up loopback"
+elif command -v ifconfig >/dev/null 2>&1; then
+  echo "[.] Using ifconfig"
+  ifconfig lo: 127.0.0.1 netmask 255.0.0.0 up || echo "[!] Failed to use ifconfig to bring up loopback"
 else
-  ifconfig lo: 127.0.0.1 netmask 255.0.0.0 up
+  echo "[!] ip and ifconfig not found! Cannot setup localhost.."
+  exit 666
 fi
 
 # for interactive use - enable shell prompt
@@ -550,8 +555,8 @@ fi
 
 # copy some required utils
 # statically built busybox installed from system package
-cp "$(which busybox)" "$DIR/$BUSYBOX_STATIC"
-
+cp "$(which busybox)"  "$DIR/$BUSYBOX_STATIC"
+cp "$(which ifconfig)" "$DIR/sbin/ifconfig"
 
 log_success "done preparing root filesystem"
 
