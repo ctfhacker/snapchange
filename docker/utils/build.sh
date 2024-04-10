@@ -450,22 +450,9 @@ set {unsigned char}($SNAPSHOT_FUNCTION+0x1)=0x0f
 set {unsigned char}($SNAPSHOT_FUNCTION+0x2)=0x01
 set {unsigned char}($SNAPSHOT_FUNCTION+0x3)=0xc1
 
-# set {unsigned char}($SNAPSHOT_FUNCTION+0x4)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0x5)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0x6)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0x7)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0x8)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0x9)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0xa)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0xb)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0xc)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0xd)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0xe)=0xcd
-# set {unsigned char}($SNAPSHOT_FUNCTION+0xf)=0xcd
-
-# Call syscall - exit(123)
+# Call exit(123) after taking the snapshot
 # ❯ rasm2 'xor rax, rax ; add eax, 60 ; xor rdi, rdi ; add edi, 123 ; syscall'
-# 4831c083c03c4831ff83c77b0f05
+#   4831c083c03c4831ff83c77b0f05
 set {unsigned char}($SNAPSHOT_FUNCTION+0x4)=0x48
 set {unsigned char}($SNAPSHOT_FUNCTION+0x5)=0x31
 set {unsigned char}($SNAPSHOT_FUNCTION+0x6)=0xc0
