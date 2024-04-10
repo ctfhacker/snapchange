@@ -97,7 +97,6 @@
 #![feature(trait_alias)]
 #![feature(thread_id_value)]
 #![feature(map_try_insert)]
-#![feature(stdsimd)]
 #![feature(avx512_target_feature)]
 #![feature(core_intrinsics)]
 #![feature(associated_type_defaults)]
@@ -105,6 +104,7 @@
 #![feature(path_file_prefix)]
 #![feature(iter_array_chunks)]
 #![feature(stmt_expr_attributes)]
+#![feature(lazy_cell)]
 #![allow(rustdoc::invalid_rust_codeblocks)]
 #![allow(internal_features)]
 #![deny(missing_docs)]
@@ -158,6 +158,9 @@ mod page_table;
 pub mod fuzzer;
 pub use fuzzer::Fuzzer;
 
+#[cfg(feature = "netfile")]
+pub use fuzzer::NetFileFuzzer;
+
 mod symbols;
 pub use symbols::Symbol;
 
@@ -185,9 +188,10 @@ mod commands;
 mod coverage_analysis;
 pub mod expensive_mutators;
 pub mod feedback;
-mod filesystem;
+pub mod filesystem;
 pub mod fuzz_input;
 pub mod mutators;
+pub mod network;
 
 mod stats_tui;
 pub mod utils;
@@ -262,15 +266,36 @@ pub enum Execution {
 
     /// Reset the VM state and continue execution to the beginning of the snapshot
     Reset,
+
+    /// Reset when the VM opens a previously unknown file for the first time
+    OpenedNewFileReset {
+        /// The path of the file opened
+        path: String,
+    },
+
+    /// Reset when the VM comes across a new packet
+    NeedAnotherPacketReset {
+        /// The new number of packets to generate
+        number_of_packets: u64,
+    },
 }
 
 impl Execution {
     /// Returns true if the given Execution state is a crash.
     pub fn is_crash(&self) -> bool {
-        match &self {
-            Self::CrashReset { .. } => true,
-            _ => false,
-        }
+        matches!(self, Self::CrashReset { .. })
+    }
+
+    /// Returns true if the given Execution state causes the VM to reset
+    pub fn is_reset(&self) -> bool {
+        matches!(
+            self,
+            Self::Reset
+                | Self::CrashReset { .. }
+                | Self::TimeoutReset
+                | Self::OpenedNewFileReset { .. }
+                | Self::NeedAnotherPacketReset { .. }
+        )
     }
 }
 

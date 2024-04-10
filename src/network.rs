@@ -27,106 +27,266 @@ pub enum Error {
 #[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// File stat information
-#[repr(C)]
-#[derive(Default, Debug)]
-pub struct Stat {
-    st_dev: u64,
-    st_ino: u64,
-    st_mode: u32,
-    st_nlink: u64,
-    st_uid: u32,
-    st_gid: u32,
-    st_rdev: u64,
-    st_size: i64,
-    st_blksize: i64,
-    st_blocks: i64,
-    st_atime: i64,
-    st_mtime: i64,
-    st_ctime: i64,
+/// The domain of a socket
+#[repr(i32)]
+#[allow(missing_docs)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum Domain {
+    Unspecified = 0,
+    Local,
+    Ipv4,
+    Ipv6,
+    Unknown(i32),
 }
 
-/// Emulated filesystem used to perform file operations based on a file descriptor
+impl From<i32> for Domain {
+    fn from(val: i32) -> Domain {
+        match val {
+            0 => Domain::Unspecified,
+            libc::AF_LOCAL => Domain::Local,
+            libc::AF_INET => Domain::Ipv4,
+            libc::AF_INET6 => Domain::Ipv6,
+            _ => Domain::Unknown(val),
+        }
+    }
+}
+
+/// The type of a socket
+#[repr(i32)]
+#[allow(missing_docs)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum SocketType {
+    Stream,
+    Datagram,
+    SeqPacket,
+    Raw,
+    Unknown(i32),
+}
+
+impl From<i32> for SocketType {
+    fn from(val: i32) -> Self {
+        match val {
+            libc::SOCK_STREAM => SocketType::Stream,
+            libc::SOCK_DGRAM => SocketType::Datagram,
+            libc::SOCK_SEQPACKET => SocketType::SeqPacket,
+            libc::SOCK_RAW => SocketType::Raw,
+            _ => SocketType::Unknown(val),
+        }
+    }
+}
+
+/// The protocol of a socket
+#[repr(i32)]
+#[allow(missing_docs)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum IpProtocol {
+    Unspecified = 0,
+    Tcp,
+    Udp,
+    Unknown(i32),
+}
+
+impl From<i32> for IpProtocol {
+    fn from(val: i32) -> Self {
+        match val {
+            0 => IpProtocol::Unspecified,
+            libc::IPPROTO_TCP => IpProtocol::Tcp,
+            libc::SOCK_DGRAM => IpProtocol::Udp,
+            _ => IpProtocol::Unknown(val),
+        }
+    }
+}
+
+/// An emulated socket
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Socket {
+    domain: Domain,
+    typ: SocketType,
+    protocol: IpProtocol,
+    options: (i32, i32, Vec<u8>),
+    bind: Vec<u8>,
+    listen_backlog: i32,
+}
+
+/// Emulated network
 #[allow(dead_code)]
 #[derive(Debug)]
-pub struct FileSystem {
-    /// Filenames of available files
-    names: Vec<String>,
-
-    /// Data of all available files
-    data: Vec<Vec<u8>>,
-
-    /// Current offsets of all available files
-    offsets: Vec<usize>,
+pub struct Network {
+    /// Currently emulated sockets
+    pub sockets: Vec<Socket>,
 
     /// Translation of file descriptors to the internal index
     fd_to_index: BTreeMap<u64, usize>,
 
-    /// The next fd to assign
-    next_custom_fd: u64,
+    /// The next socket id to assign
+    next_custom_socket: u64,
+
+    /// The next file descriptor to assign
+    next_fd: u64,
 }
 
-impl std::default::Default for FileSystem {
+impl std::default::Default for Network {
     fn default() -> Self {
         Self {
-            names: Vec::new(),
-            data: Vec::new(),
-            offsets: Vec::new(),
+            sockets: Vec::new(),
             fd_to_index: BTreeMap::new(),
-            next_custom_fd: 0xcd_0000,
+            next_custom_socket: 0xee_0000,
+            next_fd: 0xcd_0000,
         }
     }
 }
 
-impl FileSystem {
+impl Network {
     /// Add a new file with `name` and `data` to the filesystem and return the created file descriptor
-    pub fn new_file(&mut self, name: String, data: Vec<u8>) -> u64 {
-        self.new_file_with_fd(None, name, data)
+    pub fn new_socket(&mut self, domain: Domain, typ: SocketType, protocol: IpProtocol) -> u64 {
+        self.new_socket_with_descriptor(None, domain, typ, protocol)
     }
 
     /// Reset the filesystem to an empty state
     pub fn reset(&mut self) {
-        *self = FileSystem::default();
+        *self = Network::default();
     }
 
-    /// Add a new file with descriptor `fd`, `name`, and `data` to the filesystem
-    pub fn new_file_with_fd(&mut self, mut fd: Option<u64>, name: String, data: Vec<u8>) -> u64 {
-        if fd.is_none() {
-            fd = Some(self.next_custom_fd);
-            self.next_custom_fd += 1;
+    /// Add a new socket with descriptor `socket`, `domain`, `type`, and `protocol` to the emulated network
+    pub fn new_socket_with_descriptor(
+        &mut self,
+        mut socket: Option<u64>,
+        domain: Domain,
+        typ: SocketType,
+        protocol: IpProtocol,
+    ) -> u64 {
+        if socket.is_none() {
+            socket = Some(self.next_custom_socket);
+            self.next_custom_socket += 1;
         }
 
-        let fd = fd.unwrap();
+        let fd = socket.unwrap();
 
-        log::debug!("New file! fd: {fd:x?} name: {name:?}");
+        log::debug!(
+            "New socket! fd: {fd:x?} domain: {domain:?} type: {typ:?} protocol {protocol:?}"
+        );
         // crate::utils::hexdump(&data, 0x12340000);
 
         // Get the index for the new file
         let index = self.fd_to_index.len();
 
         if let Some(old_index) = self.fd_to_index.insert(fd, index) {
-            log::debug!(
-                "Overwritting old file data: fd {fd:#x?} name: {:?} data: {} new data: {}",
-                self.names[old_index],
-                self.data[old_index].len(),
-                data.len()
-            );
+            log::warn!("Overwritting old socket data: fd {fd:#x?}");
 
             // Reset the old_index for this fd
             self.fd_to_index.insert(fd, old_index);
 
             // Re-using another file descriptor
-            self.names[old_index] = name;
-            self.data[old_index] = data;
-            self.offsets[old_index] = 0;
+            self.sockets[old_index].domain = domain;
+            self.sockets[old_index].typ = typ;
+            self.sockets[old_index].protocol = protocol;
+            self.sockets[old_index].options = (0, 0, Vec::new());
         } else {
             // Add the new file information to the file system
-            self.names.push(name);
-            self.data.push(data);
-            self.offsets.push(0);
+            self.sockets.push(Socket {
+                domain,
+                typ,
+                protocol,
+                options: (0, 0, Vec::new()),
+                bind: Vec::new(),
+                listen_backlog: 0,
+            })
         }
 
         fd
+    }
+
+    /// Emulate `setsockopt`
+    pub fn setsockopt(
+        &mut self,
+        socket: u64,
+        level: i32,
+        optname: i32,
+        opt_data: Vec<u8>,
+    ) -> Result<()> {
+        let index = self._get_index(socket)?;
+
+        // Add the socket options for this socket
+        self.sockets[index].options = (level, optname, opt_data);
+
+        Ok(())
+    }
+
+    /// Emulate `bind`
+    pub fn bind(&mut self, socket: u64, bind_data: Vec<u8>) -> Result<()> {
+        let index = self._get_index(socket)?;
+
+        // Add the socket options for this socket
+        self.sockets[index].bind = bind_data;
+
+        Ok(())
+    }
+
+    /// Emulate `listen`
+    pub fn listen(&mut self, fd: u64, backlog: i32) -> Result<()> {
+        let index = self._get_index(fd)?;
+
+        // Add the socket options for this socket
+        self.sockets[index].listen_backlog = backlog;
+
+        Ok(())
+    }
+
+    /// Emulate `listen`
+    pub fn accept(&mut self, socket: u64) -> Result<u64> {
+        let index = self._get_index(socket)?;
+
+        self.allocate_fd(socket)
+    }
+
+    /// Allocate a file descriptor for the given socket
+    /*
+    pub fn recv(&mut self, socket: u64, length: u64) -> Result<&[u8]> {
+        let index = self._get_index(socket)?;
+
+        // Get the current data and offset for the found index
+        let socket = self.sockets.get_mut(index).ok_or(Error::InternalIndex)?;
+
+        let  bytes = socket.
+
+        // If the offset is already past the total data, return an empty slice
+        if *curr_offset > curr_data.len() {
+            return Ok(&[]);
+        }
+
+        // Calculate the of the slice to read, truncating at the end of the file data
+        let end = std::cmp::min(curr_data.len(), *curr_offset + length);
+
+        // Get the returning slice of data
+        let data = curr_data.get(*curr_offset..end).ok_or(Error::SliceLength)?;
+
+        log::debug!(
+            "Reading stream {socket:#x} from file: {:?}",
+            self.names.get(index).ok_or(Error::InternalIndex)?
+        );
+
+        // Calculate the length of the data, truncated to the end of the file
+        let size = data.len();
+
+        // Update the file offset for this file
+        *curr_offset += size;
+
+        // Return the data slice
+        Ok(data)
+    }
+    */
+
+    /// Allocate a file descriptor for the given socket
+    pub fn allocate_fd(&mut self, socket: u64) -> Result<u64> {
+        let index = self._get_index(socket)?;
+
+        let fd = self.next_fd;
+        self.next_fd += 1;
+
+        // Associate this socket with the same socket
+        self.fd_to_index.insert(fd, index);
+
+        Ok(fd)
     }
 
     /// Get the internal index for this file desscriptor
@@ -134,6 +294,7 @@ impl FileSystem {
         Ok(*self.fd_to_index.get(&fd).ok_or(Error::FileDescriptor)?)
     }
 
+    /*
     /// Read `count` bytes from the file at descriptor `fd`
     pub fn read(&mut self, fd: u64, count: usize) -> Result<&[u8]> {
         // Get the internal index for this file desscriptor
@@ -254,14 +415,5 @@ impl FileSystem {
         // Return the data slice
         Ok(())
     }
-
-    /// Get the `stat` structure for the given `fd`
-    pub fn fstat(&mut self, fd: u64) -> Result<Stat> {
-        let mut stat = Stat::default();
-
-        let bytes = self.get(fd)?;
-        stat.st_size = bytes.len() as i64;
-
-        Ok(stat)
-    }
+    */
 }

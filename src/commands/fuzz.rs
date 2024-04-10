@@ -977,7 +977,7 @@ fn start_core<FUZZER: Fuzzer>(
         let redqueen_rules = fuzzvm.redqueen_rules.get(&input.fuzz_hash());
 
         // Mutate the input based on the fuzzer
-        let mutations = time!(
+        let mut mutations = time!(
             InputMutate,
             fuzzer.mutate_input(
                 &mut input,
@@ -1125,24 +1125,36 @@ fn start_core<FUZZER: Fuzzer>(
                 execution = Execution::TimeoutReset;
             }
 
+            // Allow the fuzzer to handle new opened files
+            #[cfg(feature = "netfile")]
+            if let Execution::OpenedNewFileReset { path } = &execution {
+                // Add this path to the input's known files
+                fuzzer.handle_opened_file(&mut input, path)?;
+
+                // In order to save this input (with the new opened file), we need to add feedback
+                // somehow. Currently, fake a virtual address
+                let path_hash = crate::utils::calculate_hash(path);
+                let file_feedback = (path_hash & 0x0000_ffff_ffff_ffff) | 0xdddd_0000_0000_0000;
+                feedback.record(file_feedback);
+
+                // Add a mutation log saying this input was added because it opened a new file
+                mutations.push(format!("Opened new file: {path}"));
+            }
+
+            // Allow the fuzzer to handle new opened files
+            #[cfg(feature = "netfile")]
+            if let Execution::NeedAnotherPacketReset { number_of_packets } = &execution {
+                let file_feedback = 0xcccc_0000_0000_0000 | *number_of_packets;
+                feedback.record(file_feedback);
+
+                // Add a mutation log saying this input was added because it opened a new file
+                mutations.push(format!("New packet: {number_of_packets}"));
+            }
+
             // Reset the VM if requested
-            if matches!(
-                execution,
-                Execution::Reset | Execution::CrashReset { .. } | Execution::TimeoutReset
-            ) {
+            if execution.is_reset() {
                 break;
             }
-            // match execution {
-            //     Execution::Reset | Execution::CrashReset { .. } | Execution::TimeoutReset => {
-            //         // Reset the VM if requested
-            //         break;
-            //     }
-            // Execution::Continue
-            // | Execution::CoverageContinue
-            // | Execution::CustomCoverageContinue(_) => {
-            //     // Nothing to do for continuing execution
-            // }
-            // }
         }
 
         // Exit the fuzz loop if told to
@@ -1227,6 +1239,7 @@ fn start_core<FUZZER: Fuzzer>(
         } else if feedback.has_new() {
             // If this input generated new coverage, add the input to the corpus
             let new_coverage = feedback.take_log();
+
             input.add_new_coverage(new_coverage);
             assert!(!input.metadata.read().unwrap().new_coverage.is_empty());
 

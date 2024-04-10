@@ -3,3 +3,5 @@ examples/**/constants.rs
 examples/**/snapshot
 .venv
 utils/ghidra
+.direnv
+.gdb_history

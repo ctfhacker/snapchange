@@ -1,0 +1,28 @@
+[package]
+name = "example_fuzzer"
+version = "0.1.0"
+edition = "2021"
+exclude = ["snapshot", "docker"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow     = "1"
+snapchange = { path = "../../", features = ["redqueen"] }
+rand       = "0.8"
+log        = "0.4"
+thiserror  = "1.0.58"
+serde_json = "1.0.114"
+serde      = "1.0.197"
+rustc-hash = "1.1.0"
+clap       = { version = "4.1.8", features = ["derive"] }
+rmp-serde = "1.1.2"
+
+[build-dependencies]
+regex = "1"
+
+[profile.release]
+lto = false
+codegen-units = 255
+opt-level = 3
+debug = true

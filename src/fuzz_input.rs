@@ -728,10 +728,8 @@ impl FuzzInput for Vec<u8> {
         min_length: usize,
         max_length: usize,
     ) -> InputWithMetadata<Self> {
-        debug_assert!(max_length > 1);
-
-        // generate input with random length, but make it a power of two most of the time
-        let mut len = rng.gen_range(min_length..max_length);
+        // Generate input with random length, but make it a power of two most of the time
+        let mut len = rng.gen_range(min_length..(max_length + 1));
         if rng.gen_bool(0.8) {
             len = len.next_power_of_two().max(max_length);
         }
@@ -763,7 +761,7 @@ impl FuzzInput for Vec<u8> {
 /// The mode to get redqueen rule candidates for Vec<u8>
 #[cfg(feature = "redqueen")]
 #[derive(Copy, Clone, Eq, PartialEq)]
-enum GetRuleMode {
+pub enum GetRuleMode {
     /// Return from the function after the first found candidate
     Fast,
 
@@ -916,7 +914,7 @@ impl Default for BytesMinimizeState {
 }
 
 /// Endianness for the redqueen rules
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Endian {
     /// Little endian
     Little,

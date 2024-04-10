@@ -96,6 +96,9 @@ fn start_core<FUZZER: Fuzzer>(
         redqueen_breakpoints,
     )?;
 
+    fuzzvm.binaries = Some(binaries.clone());
+    fuzzvm.modules = Some(modules.clone());
+
     // Enable single step for tracing
     if single_step {
         log::info!("Single step trace");
@@ -544,7 +547,7 @@ fn start_core<FUZZER: Fuzzer>(
             }
 
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 log::debug!("stopping tracing at @ {rip:#x}");
                 break;
             }

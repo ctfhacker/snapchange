@@ -36,6 +36,7 @@ use crate::interrupts::IdtEntry;
 use crate::linux::{PtRegs, Signal};
 use crate::memory::{ChainVal, Memory, WriteMem};
 use crate::msr::Msr;
+use crate::network::Network;
 use crate::page_table::Translation;
 use crate::rng::Rng;
 use crate::stack_unwinder::{StackUnwinders, UnwindInfo};
@@ -44,7 +45,7 @@ use crate::symbols::Symbol;
 use crate::utils::save_input_in_project;
 
 use crate::vbcpu::VbCpu;
-use crate::{handle_vmexit, Execution, SymbolList};
+use crate::{handle_vmexit, Execution, Modules, SymbolList};
 use crate::{try_u32, try_u64, try_u8, try_usize};
 
 #[cfg(feature = "redqueen")]
@@ -55,6 +56,7 @@ use crate::{
 
 use std::collections::BTreeMap;
 use std::convert::TryInto;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -74,7 +76,7 @@ pub const APIC_BASE: u64 = 0xfee0_0000;
 pub const TSS_BASE: u64 = 0xfffb_d000;
 
 /// The CR3 used to signify any possible CR3 for a virutal address
-pub(crate) const WILDCARD_CR3: Cr3 = Cr3(0x1234_1234_1234_1234);
+pub(crate) const WILDCARD_CR3: Cr3 = Cr3(0x1234_1234_1234_0000);
 
 /// Sets the type of memory (dirty or not) for a given breakpoint. This is primarily used
 /// for coverage breakpoints that have a very expensive cost to reset all coverage
@@ -575,6 +577,9 @@ pub struct FuzzVm<'a, FUZZER: Fuzzer> {
     /// Emulated filesystem
     pub filesystem: Option<FileSystem>,
 
+    /// Emulated network
+    pub network: Option<Network>,
+
     /// Fuzzer configuration
     pub config: Config,
 
@@ -583,6 +588,12 @@ pub struct FuzzVm<'a, FUZZER: Fuzzer> {
 
     /// The statistics struct for this VM
     pub core_stats: Option<Arc<Mutex<Stats<FUZZER>>>>,
+
+    /// Binary contexts for the binaries of the target in this VM
+    pub binaries: Option<Vec<PathBuf>>,
+
+    /// Modules for this VM
+    pub modules: Option<Modules>,
 
     /// Set of redqueen rules used for cmp analysis (our RedQueen implementation)
     #[cfg(feature = "redqueen")]
@@ -792,6 +803,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
             dirtied_registers: false,
             sent_packets: Vec::new(),
             filesystem: None,
+            network: None,
             config,
             #[cfg(feature = "redqueen")]
             redqueen_rules: BTreeMap::new(),
@@ -801,6 +813,8 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
             redqueen_breakpoint_addresses,
             unwinders: Some(unwinders),
             core_stats: None,
+            binaries: None,
+            modules: None,
         };
 
         // Pre-write all of the coverage breakpoints into the memory for the VM. The
@@ -917,9 +931,13 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         fuzzvm.apply_reset_breakpoints()?;
 
         // Initialize the filesystem with the files from the fuzzer
-        let mut filesystem = FileSystem::default();
-        fuzzer.init_files(&mut filesystem)?;
-        fuzzvm.filesystem = Some(filesystem);
+        let mut fs = FileSystem::default();
+        fuzzer.init_files(&mut fs)?;
+        fuzzvm.filesystem = Some(fs);
+
+        // Initialize the network with packets from the fuzzer
+        let mut network = Network::default();
+        fuzzvm.network = Some(network);
 
         // Add a breakpoint to LSTAR which is caught during `syscall` execution to
         // determine if the fuzzer wants to handle the syscall or not
@@ -3457,9 +3475,15 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         self.memory.next_avail_phys_page = self.memory.orig_next_avail_phys_page;
 
         // Initialize the filesystem with the files from the fuzzer
-        let mut filesystem = FileSystem::default();
-        fuzzer.init_files(&mut filesystem)?;
-        self.filesystem = Some(filesystem);
+        if let Some(fs) = self.filesystem.as_mut() {
+            fs.reset();
+            fuzzer.init_files(fs)?;
+        }
+
+        // Initialize the filesystem with the files from the fuzzer
+        if let Some(net) = self.network.as_mut() {
+            net.reset();
+        }
 
         // Return the guest reset perf
         Ok(())
@@ -4147,7 +4171,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -4211,7 +4235,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -4335,7 +4359,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -4431,7 +4455,7 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
         // Top of the run iteration loop for the current fuzz case
         loop {
             // Reset the VM if the vmexit handler says so
-            if matches!(execution, Execution::Reset | Execution::CrashReset { .. }) {
+            if execution.is_reset() {
                 break;
             }
 
@@ -4764,6 +4788,18 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
 
         if let Some(addrs) = self.backtrace() {
             if !addrs.is_empty() {
+                let mut files = Vec::new();
+
+                if let Some(binaries) = &self.binaries {
+                    for binary in binaries {
+                        let Ok(file) = std::fs::File::open(binary) else {
+                            continue;
+                        };
+
+                        files.push(file);
+                    }
+                }
+
                 for addr in addrs {
                     let (addr, known) = match addr {
                         UnwindInfo::Found(addr) => (addr, true),
@@ -4774,8 +4810,68 @@ impl<'a, FUZZER: Fuzzer> FuzzVm<'a, FUZZER> {
                     let mut line = format!("{addr:#018x}");
 
                     // If there is a symbol, add it also to the line
+                    let mut module_start = None;
                     if let Some(sym) = self.get_symbol(addr) {
                         line.push_str(&format!(" - {sym}"));
+
+                        if let Some(modules) = &self.modules {
+                            if let Some(module) = sym.split('!').next() {
+                                if let Some(range) = modules.get_module_range(module) {
+                                    module_start = Some(range.start);
+                                }
+                            }
+                        }
+                    }
+
+                    for file in &files {
+                        let Ok(map) = (unsafe { memmap::Mmap::map(&file) }) else {
+                            continue;
+                        };
+                        let Ok(object) = addr2line::object::File::parse(&*map) else {
+                            continue;
+                        };
+                        let Ok(context) = addr2line::Context::new(&object) else {
+                            continue;
+                        };
+
+                        // If the original RIP is not found in the context, naively check
+                        // if the module was built as PIE by subtracting the module start from
+                        // the RIP and checking addr2line for the address
+                        if let Ok(Some(loc)) = context.find_location(addr) {
+                            let curr_line = format!(
+                                " - {}:{}:{}",
+                                loc.file.unwrap_or("??"),
+                                loc.line.unwrap_or(0),
+                                loc.column.unwrap_or(0)
+                            );
+
+                            line.push_str(&curr_line);
+                            break;
+                        } else if let Some(module_start) = module_start {
+                            /*
+                            println!(
+                                "RIP {rip:#x}  Module Start {module_start:#x} Addr: {:#x}",
+                                rip.saturating_sub(module_start)
+                            );
+                            */
+
+                            // If the original RIP is not found in the context, naively check
+                            // if the module was built as PIE by subtracting the module start from
+                            // the RIP and checking addr2line for the address
+                            if let Ok(Some(loc)) =
+                                context.find_location(addr.saturating_sub(module_start))
+                            {
+                                let curr_line = format!(
+                                    " - {}:{}:{}",
+                                    loc.file.unwrap_or("??"),
+                                    loc.line.unwrap_or(0),
+                                    loc.column.unwrap_or(0)
+                                );
+
+                                line.push_str(&curr_line);
+                                break;
+                            }
+                        }
                     }
 
                     if !known {

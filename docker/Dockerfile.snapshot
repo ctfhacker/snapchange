@@ -59,9 +59,6 @@ RUN cd /snapchange \
   && GZIP=-9 tar cvzf QEMU.tar.gz QEMU \
   && rm -rf QEMU
 
-COPY ./utils /snapchange/utils
-COPY ./coverage_scripts /snapchange/coverage_scripts
-RUN chmod +x ./utils/*.sh && test -x utils/go.sh
 
 FROM ubuntu:$UBUNTU_VERSION
 COPY --from=builder /snapchange /snapchange
@@ -80,6 +77,10 @@ RUN apt-get update -q \
      openjdk-17-jdk \ 
   && apt-get clean -y \
   && rm -rf /var/lib/apt/lists/*
+
+COPY ./utils /snapchange/utils
+COPY ./coverage_scripts /snapchange/coverage_scripts
+RUN chmod +x /snapchange/utils/*.sh && test -x /snapchange/utils/go.sh
 
 ENV SNAPCHANGE_ROOT="/snapchange/"
 

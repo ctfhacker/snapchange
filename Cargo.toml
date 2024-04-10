@@ -48,6 +48,8 @@ crossterm = "0.22.1"
 tui-logger = "0.8.1"
 toml = "0.7.2"
 extended = "0.1.0"
+simd-json = "0.13.8"
+rmp-serde = "1.1.2"
 
 [profile.release]
 debug = true
@@ -58,3 +60,4 @@ default = []
 # default = ["redqueen", "custom_feedback"]
 redqueen = []
 custom_feedback = []
+netfile = ["custom_feedback"]

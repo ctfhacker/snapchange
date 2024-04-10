@@ -21,6 +21,7 @@ use crate::filesystem::FileSystem;
 use crate::fuzz_input::{FuzzInput, InputMetadata, InputWithMetadata};
 use crate::fuzzvm::{FuzzVm, HookFn};
 use crate::mutators;
+use crate::network::Network;
 use crate::rng::Rng;
 use crate::Execution;
 
@@ -86,7 +87,7 @@ pub enum ResetBreakpointType {
 }
 
 /// How to lookup a given virtual address in the snapshot memory
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub enum AddressLookup {
     /// The direct virtual address
@@ -300,6 +301,21 @@ pub trait Fuzzer: Default + Sized {
         _input: &InputWithMetadata<Self::Input>,
         _fuzzvm: &mut FuzzVm<Self>,
         _crash_file: &Path,
+    ) -> Result<()> {
+        // No action by default
+        Ok(())
+    }
+
+    /// Fuzzer specific handling of opening a new file. Used primarily for `InputlessFuzzer` to
+    /// know which files to create on mutation/generation.
+    ///
+    /// # Errors
+    ///
+    /// * The target specific fuzzer failed to handle the new path
+    fn handle_opened_file(
+        &self,
+        _input: &mut InputWithMetadata<Self::Input>,
+        _opened_file: &str,
     ) -> Result<()> {
         // No action by default
         Ok(())
